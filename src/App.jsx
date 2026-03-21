@@ -421,7 +421,7 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
   }
 ]`,
     "You are a vocabulary education expert. Respond with a valid JSON array only — no markdown, no explanation.",
-    4000
+    Math.min(16000, words.length * 700 + 1000)
   );
 
   // result may be an array directly or wrapped in an object
@@ -647,17 +647,15 @@ function buildImagePrompt(paragraph, bible) {
     return `A beautiful painterly storybook illustration depicting: "${paragraph.slice(0, 250)}". Victorian era, warm candlelight, no text in image.`;
   }
   const paraLower = paragraph.toLowerCase();
-  const namedChars = (bible.characters || []).filter(c =>
-    [c.name, ...(c.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
-  );
-  const charsToUse = namedChars.length > 0 ? namedChars : bible.characters?.slice(0, 1) || [];
   const namedSettings = (bible.settings || []).filter(s =>
     [s.name, ...(s.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
   );
   const style = bible.styleConstants || "painterly Victorian storybook illustration, no text in image";
+  // Always include all characters as reference so appearances stay consistent across every image
+  const allChars = (bible.characters || []).slice(0, 5);
   const parts = [
     `Storybook illustration depicting this scene: "${paragraph.slice(0, 300)}"`,
-    charsToUse.length  && `Character appearance — ${charsToUse.map(c => c.promptFragment).join("; ")}`,
+    allChars.length && `Character reference (keep appearance consistent) — ${allChars.map(c => c.promptFragment).join("; ")}`,
     namedSettings.length && `Setting — ${namedSettings.map(s => s.promptFragment).join("; ")}`,
     `Style: ${style}`,
   ].filter(Boolean);
@@ -911,7 +909,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </div>
           ))}
         </div>
-        {exportJson && (
+        {exportJson && !isLocal() && (
           <div style={{marginTop:16,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)"}}>
@@ -936,7 +934,8 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </pre>
           </div>
         )}
-        {/* Tarball upload — optional, preloads images before game generation */}
+        {/* Tarball upload — only shown when Gemini is not directly accessible */}
+        {!(isLocal() && getGeminiKey()) && (
         <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
           border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
@@ -967,6 +966,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             )}
           </div>
         </div>
+        )}
 
         <div style={{marginTop:12,display:"flex",justifyContent:"flex-end"}}>
           <button className="primary-btn" disabled={!canStart} onClick={handleStart}>
