@@ -9,6 +9,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        proxyTimeout: 120000,  // 2 min — Claude API calls can be slow
+        timeout: 120000,
       },
     },
   },
