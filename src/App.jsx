@@ -653,8 +653,7 @@ function buildImagePrompt(paragraph, bible) {
   const namedSettings = (bible.settings || []).filter(s =>
     [s.name, ...(s.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
   );
-  const REQUIRED_STYLE = "painterly Victorian storybook illustration, warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image";
-  const style = bible.styleConstants ? `${bible.styleConstants}, ${REQUIRED_STYLE}` : REQUIRED_STYLE;
+  const style = "painterly Victorian storybook illustration, warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image";
   // Always include all characters as reference so appearances stay consistent across every image
   const allChars = (bible.characters || []).slice(0, 5);
   const parts = [
@@ -1144,6 +1143,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
+              console.log('[image prompt]', a.imagePrompt);
               const img = await generateGeminiImageDirect(a.imagePrompt);
               return { ...a, image: img };
             })
