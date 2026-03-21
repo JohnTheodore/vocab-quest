@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
-// ── API key helpers — work in both Claude artifact and local Vite ─────────────
+// ── API key helpers ───────────────────────────────────────────────────────────
 function getAnthropicKey() {
   try { const k = import.meta.env?.VITE_ANTHROPIC_API_KEY; if (k) return k; } catch {}
   return window.ANTHROPIC_API_KEY || "";
@@ -8,12 +8,12 @@ function getAnthropicKey() {
 
 function getGeminiKey() {
   try { const k = import.meta.env?.VITE_GEMINI_API_KEY; if (k) return k; } catch {}
-  return null; // not available in artifact — use tarball workflow instead
+  return null;
 }
 
-// Are we running locally (Vite) rather than in the Claude artifact?
+// Are we running locally (Vite dev server with Express backend)?
 function isLocal() {
-  try { return !!import.meta.env; } catch { return false; }
+  try { return !!import.meta.env?.DEV; } catch { return false; }
 }
 
 
@@ -275,14 +275,22 @@ async function claudeJSON(prompt, system = "", maxTokens = 2000) {
     messages: [{ role: "user", content: prompt }],
   };
   if (system) body.system = system;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+
+  // Local (Codespace/Vite): route through Express + Agent SDK (claude login auth)
+  // Artifact (claude.ai): call Anthropic directly with injected key
+  const url = isLocal() ? "/api/claude" : "https://api.anthropic.com/v1/messages";
+  const headers = isLocal()
+    ? { "Content-Type": "application/json" }
+    : {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "x-api-key": getAnthropicKey(),
+      };
+
+  const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "x-api-key": getAnthropicKey(),
-    },
+    headers,
     body: JSON.stringify(body),
   });
   const data = await res.json();
