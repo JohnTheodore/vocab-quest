@@ -647,13 +647,13 @@ function Highlighted({ paragraph, word }) {
 // ── Build image prompt using Story Bible ──────────────────────────────────────
 function buildImagePrompt(paragraph, bible) {
   if (!bible) {
-    return `A beautiful painterly storybook illustration depicting: "${paragraph.slice(0, 250)}". Victorian era, warm candlelight, no text in image.`;
+    return `Painterly Victorian storybook illustration depicting: "${paragraph.slice(0, 250)}". Warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image.`;
   }
   const paraLower = paragraph.toLowerCase();
   const namedSettings = (bible.settings || []).filter(s =>
     [s.name, ...(s.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
   );
-  const style = bible.styleConstants || "painterly Victorian storybook illustration, no text in image";
+  const style = bible.styleConstants || "painterly Victorian storybook illustration, warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image";
   // Always include all characters as reference so appearances stay consistent across every image
   const allChars = (bible.characters || []).slice(0, 5);
   const parts = [
