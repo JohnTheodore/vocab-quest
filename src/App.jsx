@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { recordSession, exportData } from "./wordRecords.js";
 
 // ── API key helpers ───────────────────────────────────────────────────────────
 function getAnthropicKey() {
@@ -612,6 +613,8 @@ const STYLES = `
   .primary-btn { background: rgba(180,130,50,0.15); border: 1px solid rgba(180,130,50,0.4); border-radius: 3px; padding: 12px 28px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
   .primary-btn:hover { background: rgba(180,130,50,0.25); }
   .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secondary-btn { background: transparent; border: 1px solid rgba(180,130,50,0.25); border-radius: 3px; padding: 8px 20px; font-family: 'Playfair Display', serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .secondary-btn:hover { border-color: rgba(180,130,50,0.45); color: var(--gold); }
 
   /* Score strip */
   .score-strip { display: flex; justify-content: center; gap: 7px; margin-bottom: 20px; flex-wrap: wrap; }
@@ -994,12 +997,12 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
         setFromCache(result.fromCache);
         // Brief pause to show the result before proceeding
         await new Promise(r => setTimeout(r, result.fromCache ? 800 : 1500));
-        onReady(result.bible);
+        onReady(result.bible, result.hash);
       } catch (e) {
         setError(e.message);
         // Even if Story Bible fails, proceed without it
         await new Promise(r => setTimeout(r, 1500));
-        onReady(null);
+        onReady(null, null);
       }
     })();
   }, []);
@@ -1497,7 +1500,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
 }
 
 // ── Phase: RESULTS ────────────────────────────────────────────────────────────
-function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) {
+function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPlayAgain }) {
   const scoreConfig = {
     correct: { bg:"rgba(80,160,80,0.12)",  border:"rgba(100,200,100,0.35)", color:"var(--correct-text)", icon:"✦", label:"first try" },
     retry:   { bg:"rgba(200,160,40,0.1)",  border:"rgba(220,180,60,0.35)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
@@ -1508,6 +1511,18 @@ function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) 
   const meaningPerfect = assets.filter(a => scores[a.word]?.meaning === "correct").length;
   const blankPerfect   = assets.filter(a => scores[a.word]?.blank   === "correct").length;
   const allPerfect = meaningPerfect === total && blankPerfect === total;
+
+  useEffect(() => {
+    const wordResults = assets.flatMap(a => [
+      { word: a.word, taskType: "meaning",    firstTry: scores[a.word]?.meaning === "correct", attempts: scores[a.word]?.meaning ? 1 : 0 },
+      { word: a.word, taskType: "fill-blank", firstTry: scores[a.word]?.blank   === "correct", attempts: scores[a.word]?.blank   ? 1 : 0 },
+    ]);
+    recordSession({
+      gameType: "vocab-quest",
+      context: { bookTitle, bookHash, chapterTitle },
+      wordResults,
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="card">
@@ -1548,6 +1563,9 @@ function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) 
         </div>
 
         <button className="primary-btn" onClick={onPlayAgain}>Play Again</button>
+        <div style={{marginTop:12}}>
+          <button className="secondary-btn" onClick={() => exportData()}>Download Progress</button>
+        </div>
       </div>
     </div>
   );
@@ -1582,7 +1600,7 @@ export default function App() {
           <StoryBiblePhase
             fullText={bookData.fullText}
             bookTitle={bookData.bookTitle}
-            onReady={bible => { setStoryBible(bible); setPhase("chapters"); }}
+            onReady={(bible, hash) => { setStoryBible(bible); setBookData(d => ({ ...d, hash })); setPhase("chapters"); }}
           />
         )}
 
@@ -1628,6 +1646,7 @@ export default function App() {
             assets={gameAssets}
             scores={scores}
             bookTitle={bookData.bookTitle}
+            bookHash={bookData.hash}
             chapterTitle={chapter.title}
             onPlayAgain={() => setPhase("chapters")}
           />
