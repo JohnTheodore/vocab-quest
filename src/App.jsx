@@ -16,8 +16,7 @@ function isLocal() {
   try { return !!import.meta.env?.DEV; } catch { return false; }
 }
 
-
-// ── EPUB parser (uses JSZip via CDN, loaded dynamically) ──────────────────────
+// ── EPUB/TXT Parsers ──────────────────────────────────────────────────────────
 async function loadJSZip() {
   if (window.JSZip) return window.JSZip;
   await new Promise((res, rej) => {
@@ -107,28 +106,23 @@ async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-ima
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
-function Highlighted({ paragraph, word }) {
+function Highlighted({ passage, word }) {
   const re = new RegExp(`(${word})`, "i");
-  const parts = paragraph.split(re);
+  const parts = passage.split(re);
   return <>{parts.map((p, i) => re.test(p) ? <mark key={i}>{p}</mark> : p)}</>;
 }
 
-// ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [phase, setPhase] = useState("upload");
-  const [bookData, setBookData] = useState(null);
   const [chapters, setChapters] = useState([]);
+  const [bookTitle, setBookTitle] = useState("");
   const [currentChapter, setCurrentChapter] = useState(null);
-  const [selectedWords, setSelectedWords] = useState([]);
-  const [gameAssets, setGameAssets] = useState([]);
-  const [currentAssetIdx, setCurrentAssetIdx] = useState(0);
-  const [scores, setScores] = useState({});
 
   async function handleFileUpload(file) {
     if (!file) return;
     const chapters = file.name.endsWith(".epub") ? await parseEpub(file) : await parseTxt(file);
     setChapters(chapters);
-    setBookData({ title: file.name.replace(/\.[^.]+$/, "") });
+    setBookTitle(file.name.replace(/\.[^.]+$/, ""));
     setPhase("chapters");
   }
 
@@ -158,12 +152,12 @@ export default function App() {
 
       {phase === "chapters" && (
         <div className="chapter-select-view">
-          <span className="section-label">Chapters — {bookData?.title}</span>
+          <span className="section-label">Chapters — {bookTitle}</span>
           <div className="chapter-grid">
             {chapters.map(ch => (
               <button key={ch.index} className="chapter-item" onClick={() => { setCurrentChapter(ch); setPhase("game"); }}>
                 <h3>{ch.title}</h3>
-                <p>{Math.round(ch.text.split(' ').length).toLocaleString()} words</p>
+                <p style={{color: 'var(--ink-dim)', margin: 0}}>{Math.round(ch.text.split(' ').length).toLocaleString()} words</p>
               </button>
             ))}
           </div>
@@ -172,19 +166,19 @@ export default function App() {
 
       {phase === "game" && (
         <div className="game-layout">
-          <div className="illustration-column">
-             <div className="illustration" style={{background: '#e5e1d5'}}></div>
-             <div className="passage-context">
-                <h2 className="vocab-word">Languidly</h2>
-                <p className="passage">
-                  "Sara sat in the corner of the attic room... She moved <mark>languidly</mark> through the motions of tidying her possessions."
-                </p>
-             </div>
+          <div className="content-area">
+            <div className="illustration" style={{background: '#e5e1d5'}}></div>
+            <div style={{marginTop: '32px'}}>
+              <h2 className="vocab-word">Languidly</h2>
+              <p className="passage">
+                "Sara sat in the corner of the attic room, watching the rain trace slow rivers down the windowpane. She moved <mark>languidly</mark> through the motions of tidying her possessions."
+              </p>
+            </div>
           </div>
-          <div className="quiz-column card">
+          <div className="quiz-area card">
             <div className="card-body">
               <span className="section-label">Definition Quiz</span>
-              <h3 className="quiz-question">What does "languidly" mean?</h3>
+              <h3 style={{fontFamily: "'Playfair Display'", fontSize: '24px', marginBottom: '24px'}}>What does "languidly" mean?</h3>
               <div className="options-stack">
                 <button className="option-btn">Quickly and with great energy</button>
                 <button className="option-btn">Slowly, dreamsily, and without effort</button>

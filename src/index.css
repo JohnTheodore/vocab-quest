@@ -1,3 +1,4 @@
+/* index.css */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
 
 :root {
@@ -147,10 +148,6 @@ body {
   background: #eee;
 }
 
-.passage-context {
-  margin-top: 40px;
-}
-
 .vocab-word {
   font-family: 'Playfair Display', serif;
   font-size: 56px;
@@ -179,12 +176,6 @@ body {
 
 .card-body {
   padding: 48px;
-}
-
-.quiz-question {
-  font-family: 'Playfair Display', serif;
-  font-size: 28px;
-  margin-bottom: 32px;
 }
 
 .options-stack {
