@@ -1,4 +1,3 @@
-// wordRecords.js
 // ── Word Records & Spaced Repetition ─────────────────────────────────────────
 
 const STORAGE_KEY = "vocab-quest-data";
