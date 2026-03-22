@@ -1,13 +1,12 @@
-/* index.css */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
 
 :root {
-  --paper: #fcfaf2;
-  --ink: #2c2925;
-  --ink-dim: #5c554e;
+  --paper: #f9f5eb;
+  --ink: #1e1c10;
+  --ink-dim: #8d7168;
   --gold: #b08d42;
+  --border: rgba(30, 28, 16, 0.1);
   --gold-faint: rgba(176, 141, 66, 0.1);
-  --border: rgba(44, 41, 37, 0.15);
   --correct: rgba(46, 125, 50, 0.1);
   --correct-text: #2e7d32;
   --wrong: rgba(198, 40, 40, 0.08);
@@ -25,39 +24,16 @@ body {
   color: var(--ink);
   font-family: 'Lora', serif;
   line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
   min-height: 100vh;
 }
 
 .app-container {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 40px 24px;
 }
 
-.minimal-header {
-  text-align: center;
-  margin-bottom: 60px;
-}
-
-.minimal-header h1 {
-  font-family: 'Playfair Display', serif;
-  font-size: 42px;
-  font-weight: 400;
-  margin: 0;
-}
-
-.card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.03);
-}
-
-.card-body {
-  padding: 40px;
-}
-
+/* Section Label */
 .section-label {
   font-size: 11px;
   letter-spacing: 0.2em;
@@ -67,15 +43,16 @@ body {
   display: block;
 }
 
+/* Buttons */
 .primary-btn {
   background: var(--ink);
-  color: var(--paper);
+  color: #fff;
   border: none;
   padding: 16px 32px;
   font-family: 'Playfair Display', serif;
   font-size: 18px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 0.2s;
   display: inline-block;
 }
 
@@ -83,19 +60,64 @@ body {
   background: var(--gold);
 }
 
+/* Upload Modal Styles */
+.upload-modal-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 80vh;
+}
+
+.upload-modal {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  padding: 64px;
+  width: 100%;
+  max-width: 600px;
+  text-align: center;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.02);
+}
+
+.upload-dropzone {
+  border: 1px dashed var(--border);
+  padding: 48px;
+  margin-bottom: 32px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.upload-dropzone:hover {
+  background: var(--paper);
+}
+
+.upload-icon {
+  font-size: 32px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.upload-dropzone p {
+  font-family: 'Playfair Display', serif;
+  font-style: italic;
+  font-size: 20px;
+  color: var(--ink-dim);
+}
+
+/* Chapter Grid */
 .chapter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
 }
 
 .chapter-item {
+  background: #fff;
   border: 1px solid var(--border);
-  padding: 24px;
+  padding: 32px 24px;
+  text-align: left;
   cursor: pointer;
   transition: all 0.2s;
-  text-align: left;
-  background: none;
 }
 
 .chapter-item:hover {
@@ -105,62 +127,81 @@ body {
 
 .chapter-item h3 {
   font-family: 'Playfair Display', serif;
-  font-size: 20px;
-  margin: 0 0 8px;
+  font-size: 24px;
+  margin-bottom: 8px;
 }
 
+/* Game Layout */
 .game-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 48px;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 64px;
   align-items: start;
 }
 
 .illustration {
   width: 100%;
-  aspect-ratio: 4/3;
-  background: #e5e1d5;
+  aspect-ratio: 16/10;
   object-fit: cover;
   border: 1px solid var(--border);
+  background: #eee;
+}
+
+.passage-context {
+  margin-top: 40px;
 }
 
 .vocab-word {
   font-family: 'Playfair Display', serif;
-  font-size: 48px;
+  font-size: 56px;
   color: var(--gold);
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 
 .passage {
+  font-size: 20px;
   font-style: italic;
   line-height: 1.8;
   color: var(--ink-dim);
-  margin-bottom: 32px;
-  font-size: 18px;
 }
 
 .passage mark {
   background: var(--gold-faint);
-  color: var(--ink);
   padding: 0 4px;
   border-bottom: 2px solid var(--gold);
+  color: var(--ink);
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.card-body {
+  padding: 48px;
+}
+
+.quiz-question {
+  font-family: 'Playfair Display', serif;
+  font-size: 28px;
+  margin-bottom: 32px;
 }
 
 .options-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .option-btn {
-  padding: 20px;
+  padding: 24px;
   border: 1px solid var(--border);
   background: #fff;
   text-align: left;
-  font-size: 16px;
+  font-family: 'Lora', serif;
+  font-size: 18px;
   cursor: pointer;
   transition: all 0.2s;
-  font-family: 'Lora', serif;
 }
 
 .option-btn:hover {
@@ -168,20 +209,9 @@ body {
   background: var(--gold-faint);
 }
 
-.option-btn.correct {
-  background: var(--correct);
-  color: var(--correct-text);
-  border-color: var(--correct-text);
-}
-
-.option-btn.wrong {
-  background: var(--wrong);
-  color: var(--wrong-text);
-  border-color: var(--wrong-text);
-}
-
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .game-layout {
     grid-template-columns: 1fr;
+    gap: 40px;
   }
 }

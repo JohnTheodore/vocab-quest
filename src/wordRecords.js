@@ -1,6 +1,3 @@
-// wordRecords.js
-// ── Spaced Repetition Logic (SM-2) ──
-
 const STORAGE_KEY = "vocab-quest-data";
 
 async function loadData() {
@@ -13,7 +10,7 @@ async function loadData() {
 async function saveData(data) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) { console.warn("Storage write failed:", e); }
+  } catch (e) { console.warn("wordRecords: storage write failed:", e); }
 }
 
 function sm2Update(record, quality) {

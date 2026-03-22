@@ -16,7 +16,8 @@ function isLocal() {
   try { return !!import.meta.env?.DEV; } catch { return false; }
 }
 
-// ── EPUB/TXT Parsers ──────────────────────────────────────────────────────────
+
+// ── EPUB parser (uses JSZip via CDN, loaded dynamically) ──────────────────────
 async function loadJSZip() {
   if (window.JSZip) return window.JSZip;
   await new Promise((res, rej) => {
@@ -64,7 +65,7 @@ async function parseEpub(file) {
       if (text.length > 200) chapterTexts.push({ href, text });
     } catch (e) {}
   }
-  return chapterTexts.map((ch, i) => ({ index: i, title: `Section ${i + 1}`, text: ch.text, href: ch.href }));
+  return chapterTexts.map((ch, i) => ({ index: i, title: `Chapter ${i + 1}`, text: ch.text, href: ch.href }));
 }
 
 async function parseTxt(file) {
@@ -81,51 +82,88 @@ async function parseTxt(file) {
   return chapters;
 }
 
+// ── Direct Gemini image generation ───────────────────────────────────────────
+async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-image") {
+  const apiKey = getGeminiKey();
+  if (!apiKey) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseModalities: ["Image"] },
+        }),
+      }
+    );
+    const data = await res.json();
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const imgPart = parts.find(p => p.inlineData);
+    if (!imgPart) return null;
+    return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+  } catch (e) { return null; }
+}
+
 // ── Components ────────────────────────────────────────────────────────────────
-function Highlighted({ passage, word }) {
+function Highlighted({ paragraph, word }) {
   const re = new RegExp(`(${word})`, "i");
-  const parts = passage.split(re);
+  const parts = paragraph.split(re);
   return <>{parts.map((p, i) => re.test(p) ? <mark key={i}>{p}</mark> : p)}</>;
 }
 
+// ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [phase, setPhase] = useState("upload");
+  const [bookData, setBookData] = useState(null);
   const [chapters, setChapters] = useState([]);
-  const [bookTitle, setBookTitle] = useState("");
   const [currentChapter, setCurrentChapter] = useState(null);
+  const [selectedWords, setSelectedWords] = useState([]);
+  const [gameAssets, setGameAssets] = useState([]);
+  const [currentAssetIdx, setCurrentAssetIdx] = useState(0);
+  const [scores, setScores] = useState({});
 
   async function handleFileUpload(file) {
+    if (!file) return;
     const chapters = file.name.endsWith(".epub") ? await parseEpub(file) : await parseTxt(file);
     setChapters(chapters);
-    setBookTitle(file.name.replace(/\.[^.]+$/, ""));
+    setBookData({ title: file.name.replace(/\.[^.]+$/, "") });
     setPhase("chapters");
   }
 
   return (
     <div className="app-container">
-      <header className="minimal-header">
-        <h1>Vocabulary Quest</h1>
-      </header>
-
       {phase === "upload" && (
-        <div className="card">
-          <div className="card-body" style={{textAlign:'center', padding: '100px 40px'}}>
-             <span className="section-label">Book Upload</span>
-             <h2 style={{fontFamily: "'Playfair Display'", fontSize: '28px', marginBottom: '32px'}}>Begin your scholarly journey.</h2>
-             <input type="file" onChange={e => handleFileUpload(e.target.files[0])} style={{display:'none'}} id="file-up"/>
-             <label htmlFor="file-up" className="primary-btn">Choose an EPUB or TXT file</label>
+        <div className="upload-modal-container">
+          <div className="upload-modal">
+            <span className="section-label">Book Upload</span>
+            <div className="upload-dropzone" onClick={() => document.getElementById('file-up').click()}>
+              <div className="upload-icon">📄</div>
+              <p>Drop your EPUB/TXT file here</p>
+            </div>
+            <input 
+              id="file-up"
+              type="file" 
+              accept=".epub,.txt"
+              onChange={e => handleFileUpload(e.target.files[0])} 
+              style={{display:'none'}} 
+            />
+            <button className="primary-btn" onClick={() => document.getElementById('file-up').click()}>
+              Choose an EPUB or TXT file
+            </button>
           </div>
         </div>
       )}
 
       {phase === "chapters" && (
-        <div>
-          <span className="section-label">Chapters — {bookTitle}</span>
+        <div className="chapter-select-view">
+          <span className="section-label">Chapters — {bookData?.title}</span>
           <div className="chapter-grid">
             {chapters.map(ch => (
               <button key={ch.index} className="chapter-item" onClick={() => { setCurrentChapter(ch); setPhase("game"); }}>
                 <h3>{ch.title}</h3>
-                <p style={{color: 'var(--ink-dim)', margin: 0}}>{Math.round(ch.text.split(' ').length)} words</p>
+                <p>{Math.round(ch.text.split(' ').length).toLocaleString()} words</p>
               </button>
             ))}
           </div>
@@ -134,22 +172,22 @@ export default function App() {
 
       {phase === "game" && (
         <div className="game-layout">
-          <div>
-            <div className="illustration" style={{background: '#e5e1d5'}}></div>
-            <div style={{marginTop: '32px'}}>
-              <h2 className="vocab-word">Languidly</h2>
-              <p className="passage">
-                "Sara sat in the corner of the attic room, watching the rain trace slow rivers down the windowpane. She moved <mark>languidly</mark> through the motions of tidying her possessions."
-              </p>
-            </div>
+          <div className="illustration-column">
+             <div className="illustration" style={{background: '#e5e1d5'}}></div>
+             <div className="passage-context">
+                <h2 className="vocab-word">Languidly</h2>
+                <p className="passage">
+                  "Sara sat in the corner of the attic room... She moved <mark>languidly</mark> through the motions of tidying her possessions."
+                </p>
+             </div>
           </div>
-          <div className="card">
+          <div className="quiz-column card">
             <div className="card-body">
               <span className="section-label">Definition Quiz</span>
-              <h3 style={{fontFamily: "'Playfair Display'", fontSize: '24px', marginBottom: '24px'}}>What does "languidly" mean?</h3>
+              <h3 className="quiz-question">What does "languidly" mean?</h3>
               <div className="options-stack">
                 <button className="option-btn">Quickly and with great energy</button>
-                <button className="option-btn correct">Slowly, dreamsily, and without effort</button>
+                <button className="option-btn">Slowly, dreamsily, and without effort</button>
                 <button className="option-btn">In a very messy or careless way</button>
                 <button className="option-btn">Loudly and with heavy footsteps</button>
               </div>
