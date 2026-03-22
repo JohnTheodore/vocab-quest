@@ -1,35 +1,47 @@
 // wordRecords.js
-// ── Word Records & Spaced Repetition Logic (SM-2) ──
+// ── Word Records & Spaced Repetition ─────────────────────────────────────────
 
 const STORAGE_KEY = "vocab-quest-data";
 
 async function loadData() {
   try {
-    const val = localStorage.getItem(STORAGE_KEY);
-    return val ? JSON.parse(val) : { wordRecords: {}, sessions: [] };
+    if (window.storage) {
+      const result = await window.storage.get(STORAGE_KEY);
+      return result ? JSON.parse(result.value) : { wordRecords: {}, sessions: [] };
+    } else {
+      const val = localStorage.getItem(STORAGE_KEY);
+      return val ? JSON.parse(val) : { wordRecords: {}, sessions: [] };
+    }
   } catch { return { wordRecords: {}, sessions: [] }; }
 }
 
 async function saveData(data) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) { console.warn("Storage write failed:", e); }
+    if (window.storage) {
+      await window.storage.set(STORAGE_KEY, JSON.stringify(data));
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+  } catch (e) { console.warn("wordRecords: storage write failed:", e); }
 }
 
 function sm2Update(record, quality) {
   let { easeFactor, interval, repetitions } = record;
+
   if (quality >= 3) {
-    if (repetitions === 0) interval = 1;
+    if (repetitions === 0)      interval = 1;
     else if (repetitions === 1) interval = 6;
-    else interval = Math.round(interval * easeFactor);
+    else                        interval = Math.round(interval * easeFactor);
     repetitions += 1;
     easeFactor = Math.max(1.3, easeFactor + 0.1 - (5 - quality) * 0.08);
   } else {
     repetitions = 0;
     interval = 1;
   }
+
   const nextReviewDate = new Date();
   nextReviewDate.setDate(nextReviewDate.getDate() + interval);
+
   return {
     ...record,
     easeFactor,
@@ -42,7 +54,11 @@ function sm2Update(record, quality) {
 
 export async function recordSession(session) {
   const data = await loadData();
-  const fullSession = { ...session, id: `sess_${Date.now()}`, completedAt: new Date().toISOString() };
+  const fullSession = {
+    ...session,
+    id: `sess_${Date.now()}`,
+    completedAt: new Date().toISOString(),
+  };
   data.sessions.push(fullSession);
 
   for (const r of session.wordResults) {
@@ -57,13 +73,15 @@ export async function recordSession(session) {
     const quality = r.firstTry ? 5 : 3;
     data.wordRecords[key] = sm2Update(existing, quality);
   }
+
   await saveData(data);
   return fullSession;
 }
 
 export async function exportData() {
   const data = await loadData();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
