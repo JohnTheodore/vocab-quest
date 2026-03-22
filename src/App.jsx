@@ -16,7 +16,8 @@ function isLocal() {
   try { return !!import.meta.env?.DEV; } catch { return false; }
 }
 
-// ── EPUB/TXT Parsers ──────────────────────────────────────────────────────────
+
+// ── EPUB parser (uses JSZip via CDN, loaded dynamically) ──────────────────────
 async function loadJSZip() {
   if (window.JSZip) return window.JSZip;
   await new Promise((res, rej) => {
@@ -38,21 +39,47 @@ function htmlToText(html) {
 async function parseEpub(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
+
   const containerXml = await zip.file("META-INF/container.xml").async("text");
   const rootfileMatch = containerXml.match(/full-path="([^"]+)"/);
   if (!rootfileMatch) throw new Error("Invalid EPUB: no rootfile");
   const opfPath = rootfileMatch[1];
   const opfDir = opfPath.includes("/") ? opfPath.substring(0, opfPath.lastIndexOf("/") + 1) : "";
+
   const opfXml = await zip.file(opfPath).async("text");
   const parser = new DOMParser();
   const opfDoc = parser.parseFromString(opfXml, "application/xml");
+
   const manifest = {};
   opfDoc.querySelectorAll("manifest item").forEach(item => {
     manifest[item.getAttribute("id")] = item.getAttribute("href");
   });
+
   const spineItems = Array.from(opfDoc.querySelectorAll("spine itemref"))
     .map(ref => manifest[ref.getAttribute("idref")])
     .filter(Boolean);
+
+  const ncxId = opfDoc.querySelector("spine")?.getAttribute("toc");
+  const navHref = manifest["nav"] || manifest["toc"] || (ncxId ? manifest[ncxId] : null);
+
+  let tocEntries = [];
+  if (navHref) {
+    try {
+      const navPath = opfDir + navHref;
+      const navFile = zip.file(navPath) || zip.file(navHref);
+      if (navFile) {
+        const navHtml = await navFile.async("text");
+        const navDoc = parser.parseFromString(navHtml, "text/html");
+        const navLinks = navDoc.querySelectorAll("nav[epub\\:type='toc'] a, nav a, navPoint");
+        navLinks.forEach(el => {
+          const title = el.textContent.trim();
+          const href = el.getAttribute("href") || el.querySelector("content")?.getAttribute("src") || "";
+          if (title && href) tocEntries.push({ title, href: href.split("#")[0] });
+        });
+      }
+    } catch (e) {}
+  }
+
   const chapterTexts = [];
   for (const href of spineItems) {
     try {
@@ -64,14 +91,27 @@ async function parseEpub(file) {
       if (text.length > 200) chapterTexts.push({ href, text });
     } catch (e) {}
   }
-  return chapterTexts.map((ch, i) => ({ index: i, title: `Chapter ${i + 1}`, text: ch.text, href: ch.href }));
+
+  const chapters = chapterTexts.map((ch, i) => {
+    const tocMatch = tocEntries.find(t => ch.href.endsWith(t.href) || ch.href.includes(t.href));
+    return {
+      index: i,
+      title: tocMatch?.title || `Chapter ${i + 1}`,
+      text: ch.text,
+      href: ch.href,
+    };
+  });
+
+  return chapters;
 }
 
 async function parseTxt(file) {
   const text = await file.text();
   const chapterRegex = /\n(chapter\s+[\divxlc]+[^\n]*)\n/gi;
   const parts = text.split(chapterRegex);
-  if (parts.length < 3) return [{ index: 0, title: file.name.replace(/\.[^.]+$/, ""), text: text.trim() }];
+  if (parts.length < 3) {
+    return [{ index: 0, title: file.name.replace(/\.[^.]+$/, ""), text: text.trim() }];
+  }
   const chapters = [];
   for (let i = 1; i < parts.length; i += 2) {
     const title = parts[i].trim();
@@ -79,6 +119,46 @@ async function parseTxt(file) {
     if (body.length > 200) chapters.push({ index: chapters.length, title, text: body });
   }
   return chapters;
+}
+
+// ── SHA-256 hash ───────────────────────────────────────────────────────────
+async function hashText(text) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text.slice(0, 500000));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+
+// ── Story Bible ────────────────────────────────────────────────────────────
+async function claudeJSON(prompt, system = "", maxTokens = 2000) {
+  const body = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
+  };
+  if (system) body.system = system;
+  const url = isLocal() ? "/api/claude" : "https://api.anthropic.com/v1/messages";
+  const headers = isLocal() ? { "Content-Type": "application/json" } : {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "x-api-key": getAnthropicKey(),
+  };
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const data = await res.json();
+  const raw = (data.content || []).map(b => b.text || "").join("");
+  const objMatch = raw.match(/\{[\s\S]*\}/);
+  return JSON.parse(objMatch[0]);
+}
+
+// ── Word Suggestions ───────────────────────────────────────────────────────
+async function suggestWords(chapterText, n = 20) {
+  const result = await claudeJSON(
+    `Analyze this text and identify up to ${n} vocabulary words for age 10-14. Return only JSON: {"words":[{"word":"languidly","charIndex":1240,"reason":"..."}]}. \n\n ${chapterText.slice(0, 8000)}`,
+    "You are a vocabulary tutor. Respond with valid JSON only."
+  );
+  return result;
 }
 
 // ── Direct Gemini image generation ───────────────────────────────────────────
@@ -100,7 +180,6 @@ async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-ima
     const data = await res.json();
     const parts = data.candidates?.[0]?.content?.parts || [];
     const imgPart = parts.find(p => p.inlineData);
-    if (!imgPart) return null;
     return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
   } catch (e) { return null; }
 }
@@ -112,11 +191,17 @@ function Highlighted({ passage, word }) {
   return <>{parts.map((p, i) => re.test(p) ? <mark key={i}>{p}</mark> : p)}</>;
 }
 
+// ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [phase, setPhase] = useState("upload");
   const [chapters, setChapters] = useState([]);
   const [bookTitle, setBookTitle] = useState("");
   const [currentChapter, setCurrentChapter] = useState(null);
+  const [suggestedWords, setSuggestedWords] = useState([]);
+  const [selectedWords, setSelectedWords] = useState([]);
+  const [gameAssets, setGameAssets] = useState([]);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [scores, setScores] = useState({});
 
   async function handleFileUpload(file) {
     if (!file) return;
@@ -124,6 +209,15 @@ export default function App() {
     setChapters(chapters);
     setBookTitle(file.name.replace(/\.[^.]+$/, ""));
     setPhase("chapters");
+  }
+
+  async function handleChapterSelect(ch) {
+    setCurrentChapter(ch);
+    setPhase("bible");
+    const result = await suggestWords(ch.text);
+    setSuggestedWords(result.words);
+    setSelectedWords(result.words.slice(0, 5).map(w => w.word));
+    setPhase("selection");
   }
 
   return (
@@ -136,16 +230,8 @@ export default function App() {
               <div className="upload-icon">📄</div>
               <p>Drop your EPUB/TXT file here</p>
             </div>
-            <input 
-              id="file-up"
-              type="file" 
-              accept=".epub,.txt"
-              onChange={e => handleFileUpload(e.target.files[0])} 
-              style={{display:'none'}} 
-            />
-            <button className="primary-btn" onClick={() => document.getElementById('file-up').click()}>
-              Choose an EPUB or TXT file
-            </button>
+            <input id="file-up" type="file" accept=".epub,.txt" onChange={e => handleFileUpload(e.target.files[0])} style={{display:'none'}} />
+            <button className="primary-btn" onClick={() => document.getElementById('file-up').click()}>Choose an EPUB or TXT file</button>
           </div>
         </div>
       )}
@@ -155,30 +241,43 @@ export default function App() {
           <span className="section-label">Chapters — {bookTitle}</span>
           <div className="chapter-grid">
             {chapters.map(ch => (
-              <button key={ch.index} className="chapter-item" onClick={() => { setCurrentChapter(ch); setPhase("game"); }}>
+              <button key={ch.index} className="chapter-item" onClick={() => handleChapterSelect(ch)}>
                 <h3>{ch.title}</h3>
-                <p style={{color: 'var(--ink-dim)', margin: 0}}>{Math.round(ch.text.split(' ').length).toLocaleString()} words</p>
+                <p>{Math.round(ch.text.split(' ').length).toLocaleString()} words</p>
               </button>
             ))}
           </div>
         </div>
       )}
 
+      {phase === "selection" && (
+        <div className="selection-view">
+           <span className="section-label">Word Selection — {currentChapter?.title}</span>
+           <div className="word-grid">
+              {suggestedWords.map(w => (
+                <div key={w.word} className={`word-card ${selectedWords.includes(w.word) ? 'selected' : ''}`} onClick={() => setSelectedWords(prev => prev.includes(w.word) ? prev.filter(x => x !== w.word) : [...prev, w.word])}>
+                   <h4>{w.word}</h4>
+                   <p>{w.reason}</p>
+                </div>
+              ))}
+           </div>
+           <button className="primary-btn start-btn" onClick={() => setPhase("game")}>Start Game ({selectedWords.length})</button>
+        </div>
+      )}
+
       {phase === "game" && (
         <div className="game-layout">
-          <div className="content-area">
-            <div className="illustration" style={{background: '#e5e1d5'}}></div>
-            <div style={{marginTop: '32px'}}>
-              <h2 className="vocab-word">Languidly</h2>
-              <p className="passage">
-                "Sara sat in the corner of the attic room, watching the rain trace slow rivers down the windowpane. She moved <mark>languidly</mark> through the motions of tidying her possessions."
-              </p>
-            </div>
+          <div className="illustration-column">
+             <div className="illustration" style={{background: '#e5e1d5'}}></div>
+             <div className="passage-context">
+                <h2 className="vocab-word">Languidly</h2>
+                <p className="passage">"Sara sat in the corner... She moved <mark>languidly</mark> through the motions of tidying her possessions."</p>
+             </div>
           </div>
-          <div className="quiz-area card">
+          <div className="quiz-column card">
             <div className="card-body">
               <span className="section-label">Definition Quiz</span>
-              <h3 style={{fontFamily: "'Playfair Display'", fontSize: '24px', marginBottom: '24px'}}>What does "languidly" mean?</h3>
+              <h3 className="quiz-question">What does "languidly" mean?</h3>
               <div className="options-stack">
                 <button className="option-btn">Quickly and with great energy</button>
                 <button className="option-btn">Slowly, dreamsily, and without effort</button>
