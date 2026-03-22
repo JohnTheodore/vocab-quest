@@ -77,12 +77,14 @@ failed = []
 with tempfile.TemporaryDirectory() as tmpdir:
     for i, entry in enumerate(words):
         word = entry.get("word", f"word_{i}")
-        prompt = entry.get("imagePrompt", f"A storybook illustration representing the word '{word}'")
+        base_prompt = entry.get("imagePrompt", f"A storybook illustration representing the word '{word}'")
+        style = "Painterly Victorian storybook illustration, warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image"
+        prompt = f"{base_prompt}. {style}"
         filename = f"{word.lower().replace(' ', '_')}.jpg"
         filepath = os.path.join(tmpdir, filename)
 
         print(f"\n[{i+1}/{len(words)}] Generating: {word}")
-        print(f"  Prompt: {prompt[:100]}...")
+        print(f"  Prompt: {base_prompt[:80]}... [+ style]")
 
         success = False
         for attempt in range(3):

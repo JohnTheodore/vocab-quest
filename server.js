@@ -60,6 +60,10 @@ app.post('/api/claude', async (req, res) => {
       }
     }
 
+    if (res.headersSent) return;
+    if (!fullText) {
+      return res.status(500).json({ error: { message: 'Empty response from agent' } });
+    }
     // Return in the same shape as api.anthropic.com/v1/messages
     // so the React app needs no changes to parse the response
     res.json({
@@ -69,7 +73,9 @@ app.post('/api/claude', async (req, res) => {
 
   } catch (err) {
     console.error('Agent SDK error:', err);
-    res.status(500).json({ error: { message: err.message || 'Server error' } });
+    if (!res.headersSent) {
+      res.status(500).json({ error: { message: err.message || 'Server error' } });
+    }
   }
 });
 

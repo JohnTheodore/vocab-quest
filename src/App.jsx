@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { recordSession, exportData } from "./wordRecords.js";
 
 // ── API key helpers ───────────────────────────────────────────────────────────
 function getAnthropicKey() {
@@ -421,7 +422,7 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
   }
 ]`,
     "You are a vocabulary education expert. Respond with a valid JSON array only — no markdown, no explanation.",
-    4000
+    Math.min(16000, words.length * 700 + 1000)
   );
 
   // result may be an array directly or wrapped in an object
@@ -612,6 +613,8 @@ const STYLES = `
   .primary-btn { background: rgba(180,130,50,0.15); border: 1px solid rgba(180,130,50,0.4); border-radius: 3px; padding: 12px 28px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
   .primary-btn:hover { background: rgba(180,130,50,0.25); }
   .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secondary-btn { background: transparent; border: 1px solid rgba(180,130,50,0.25); border-radius: 3px; padding: 8px 20px; font-family: 'Playfair Display', serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .secondary-btn:hover { border-color: rgba(180,130,50,0.45); color: var(--gold); }
 
   /* Score strip */
   .score-strip { display: flex; justify-content: center; gap: 7px; margin-bottom: 20px; flex-wrap: wrap; }
@@ -644,20 +647,18 @@ function Highlighted({ paragraph, word }) {
 // ── Build image prompt using Story Bible ──────────────────────────────────────
 function buildImagePrompt(paragraph, bible) {
   if (!bible) {
-    return `A beautiful painterly storybook illustration depicting: "${paragraph.slice(0, 250)}". Victorian era, warm candlelight, no text in image.`;
+    return `Painterly Victorian storybook illustration depicting: "${paragraph.slice(0, 250)}". Warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image.`;
   }
   const paraLower = paragraph.toLowerCase();
-  const namedChars = (bible.characters || []).filter(c =>
-    [c.name, ...(c.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
-  );
-  const charsToUse = namedChars.length > 0 ? namedChars : bible.characters?.slice(0, 1) || [];
   const namedSettings = (bible.settings || []).filter(s =>
     [s.name, ...(s.aliases || [])].some(n => paraLower.includes(n.toLowerCase()))
   );
-  const style = bible.styleConstants || "painterly Victorian storybook illustration, no text in image";
+  const style = "painterly Victorian storybook illustration, warm amber and cool grey palette, soft chiaroscuro lighting, oil paint texture, no text in image";
+  // Always include all characters as reference so appearances stay consistent across every image
+  const allChars = (bible.characters || []).slice(0, 5);
   const parts = [
     `Storybook illustration depicting this scene: "${paragraph.slice(0, 300)}"`,
-    charsToUse.length  && `Character appearance — ${charsToUse.map(c => c.promptFragment).join("; ")}`,
+    allChars.length && `Character reference (keep appearance consistent) — ${allChars.map(c => c.promptFragment).join("; ")}`,
     namedSettings.length && `Setting — ${namedSettings.map(s => s.promptFragment).join("; ")}`,
     `Style: ${style}`,
   ].filter(Boolean);
@@ -911,7 +912,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </div>
           ))}
         </div>
-        {exportJson && (
+        {exportJson && !isLocal() && (
           <div style={{marginTop:16,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)"}}>
@@ -936,7 +937,8 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </pre>
           </div>
         )}
-        {/* Tarball upload — optional, preloads images before game generation */}
+        {/* Tarball upload — only shown when Gemini is not directly accessible */}
+        {!(isLocal() && getGeminiKey()) && (
         <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
           border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
@@ -967,6 +969,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             )}
           </div>
         </div>
+        )}
 
         <div style={{marginTop:12,display:"flex",justifyContent:"flex-end"}}>
           <button className="primary-btn" disabled={!canStart} onClick={handleStart}>
@@ -994,12 +997,12 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
         setFromCache(result.fromCache);
         // Brief pause to show the result before proceeding
         await new Promise(r => setTimeout(r, result.fromCache ? 800 : 1500));
-        onReady(result.bible);
+        onReady(result.bible, result.hash);
       } catch (e) {
         setError(e.message);
         // Even if Story Bible fails, proceed without it
         await new Promise(r => setTimeout(r, 1500));
-        onReady(null);
+        onReady(null, null);
       }
     })();
   }, []);
@@ -1140,6 +1143,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
+              console.log('[image prompt]', a.imagePrompt);
               const img = await generateGeminiImageDirect(a.imagePrompt);
               return { ...a, image: img };
             })
@@ -1497,7 +1501,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
 }
 
 // ── Phase: RESULTS ────────────────────────────────────────────────────────────
-function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) {
+function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPlayAgain }) {
   const scoreConfig = {
     correct: { bg:"rgba(80,160,80,0.12)",  border:"rgba(100,200,100,0.35)", color:"var(--correct-text)", icon:"✦", label:"first try" },
     retry:   { bg:"rgba(200,160,40,0.1)",  border:"rgba(220,180,60,0.35)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
@@ -1508,6 +1512,18 @@ function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) 
   const meaningPerfect = assets.filter(a => scores[a.word]?.meaning === "correct").length;
   const blankPerfect   = assets.filter(a => scores[a.word]?.blank   === "correct").length;
   const allPerfect = meaningPerfect === total && blankPerfect === total;
+
+  useEffect(() => {
+    const wordResults = assets.flatMap(a => [
+      { word: a.word, taskType: "meaning",    firstTry: scores[a.word]?.meaning === "correct", attempts: scores[a.word]?.meaning ? 1 : 0 },
+      { word: a.word, taskType: "fill-blank", firstTry: scores[a.word]?.blank   === "correct", attempts: scores[a.word]?.blank   ? 1 : 0 },
+    ]);
+    recordSession({
+      gameType: "vocab-quest",
+      context: { bookTitle, bookHash, chapterTitle },
+      wordResults,
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="card">
@@ -1548,6 +1564,9 @@ function ResultsPhase({ assets, scores, bookTitle, chapterTitle, onPlayAgain }) 
         </div>
 
         <button className="primary-btn" onClick={onPlayAgain}>Play Again</button>
+        <div style={{marginTop:12}}>
+          <button className="secondary-btn" onClick={() => exportData()}>Download Progress</button>
+        </div>
       </div>
     </div>
   );
@@ -1582,7 +1601,7 @@ export default function App() {
           <StoryBiblePhase
             fullText={bookData.fullText}
             bookTitle={bookData.bookTitle}
-            onReady={bible => { setStoryBible(bible); setPhase("chapters"); }}
+            onReady={(bible, hash) => { setStoryBible(bible); setBookData(d => ({ ...d, hash })); setPhase("chapters"); }}
           />
         )}
 
@@ -1628,6 +1647,7 @@ export default function App() {
             assets={gameAssets}
             scores={scores}
             bookTitle={bookData.bookTitle}
+            bookHash={bookData.hash}
             chapterTitle={chapter.title}
             onPlayAgain={() => setPhase("chapters")}
           />
