@@ -164,6 +164,81 @@ async function storageSet(key, value) {
   } catch (e) { console.warn("Storage write failed:", e); }
 }
 
+// ── Book library helpers ──────────────────────────────────────────────────────
+const BOOK_INDEX_KEY = "vocab-books-index";
+
+async function getBookIndex() {
+  return (await storageGet(BOOK_INDEX_KEY)) || [];
+}
+
+async function saveBookToLibrary({ chapters, bookTitle, fullText }) {
+  const hash = await hashText(fullText);
+  const index = await getBookIndex();
+  // Don't duplicate
+  if (index.find(b => b.hash === hash)) return hash;
+  index.unshift({ title: bookTitle, hash, chapterCount: chapters.length, savedAt: new Date().toISOString() });
+  await storageSet(BOOK_INDEX_KEY, index);
+  await storageSet(`vocab-book-${hash}`, { chapters, bookTitle, fullText });
+  return hash;
+}
+
+async function loadBookFromLibrary(hash) {
+  return await storageGet(`vocab-book-${hash}`);
+}
+
+async function deleteBookFromLibrary(hash) {
+  const bookData = await loadBookFromLibrary(hash);
+  if (bookData) {
+    await flushWordCaches(bookData);
+    await flushIllustrationCaches(bookData);
+  }
+  await flushStoryBible(hash);
+  // Remove book data and index entry
+  try {
+    if (window.storage) await window.storage.delete?.(`vocab-book-${hash}`);
+    localStorage.removeItem(`vocab-book-${hash}`);
+  } catch {}
+  const index = await getBookIndex();
+  await storageSet(BOOK_INDEX_KEY, index.filter(b => b.hash !== hash));
+}
+
+async function flushWordCaches(bookData) {
+  for (const ch of bookData.chapters || []) {
+    const chapterHash = await hashText(ch.text);
+    const key = `wordlist-${chapterHash}`;
+    try {
+      if (window.storage) await window.storage.delete?.(key);
+      localStorage.removeItem(key);
+    } catch {}
+  }
+}
+
+async function flushStoryBible(bookHash) {
+  try {
+    if (window.storage) await window.storage.delete?.(`storybible-${bookHash}`);
+    localStorage.removeItem(`storybible-${bookHash}`);
+  } catch {}
+}
+
+async function flushIllustrationCaches(bookData) {
+  for (const ch of bookData.chapters || []) {
+    const chapterHash = await hashText(ch.text);
+    const indexKey = `illust-index-${chapterHash}`;
+    const words = (await storageGet(indexKey)) || [];
+    for (const w of words) {
+      const key = `illust-${chapterHash}-${w}`;
+      try {
+        if (window.storage) await window.storage.delete?.(key);
+        localStorage.removeItem(key);
+      } catch {}
+    }
+    try {
+      if (window.storage) await window.storage.delete?.(indexKey);
+      localStorage.removeItem(indexKey);
+    } catch {}
+  }
+}
+
 // ── Story Bible generation ────────────────────────────────────────────────────
 async function generateStoryBible(fullText, bookTitle) {
   const sample = fullText.slice(0, 60000);
@@ -504,6 +579,49 @@ const STYLES = `
   .upload-zone p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
   .upload-zone input { display: none; }
 
+  /* Book library */
+  .book-library { margin-bottom: 20px; }
+  .book-library-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(184,144,42,0.5); margin-bottom: 10px; }
+  .book-entry { margin-bottom: 8px; }
+  .book-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border: 1px solid rgba(180,130,50,0.15); border-radius: 3px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .book-entry:has(.book-cache-panel) .book-item { border-radius: 3px 3px 0 0; margin-bottom: 0; }
+  .book-item:hover { background: rgba(180,130,50,0.07); border-color: rgba(180,130,50,0.35); }
+  .book-item-info { flex: 1; min-width: 0; }
+  .book-item-title { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book-item-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .book-item-actions { flex-shrink: 0; margin-left: 12px; display: flex; gap: 6px; align-items: center; }
+  .book-item-btn {
+    padding: 4px 10px; font-size: 11px; border-radius: 3px; cursor: pointer; transition: all 0.15s;
+    background: rgba(180,130,50,0.08); border: 1px solid rgba(180,130,50,0.2); color: rgba(184,144,42,0.6);
+  }
+  .book-item-btn:hover { background: rgba(180,130,50,0.15); border-color: rgba(180,130,50,0.35); }
+  .book-item-btn.kebab { font-weight: bold; letter-spacing: 1px; padding: 4px 8px; }
+  .book-item-btn.remove { color: #c08080; border-color: rgba(200,80,80,0.2); background: rgba(200,80,80,0.08); font-size: 14px; padding: 2px 8px; line-height: 1; }
+  .book-item-btn.remove:hover { background: rgba(200,80,80,0.2); border-color: rgba(200,80,80,0.4); }
+  .book-cache-panel {
+    padding: 12px 16px; margin: 0 0 8px; background: rgba(0,0,0,0.18);
+    border: 1px solid rgba(180,130,50,0.1); border-top: none; border-radius: 0 0 3px 3px;
+  }
+  .cache-panel-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(184,144,42,0.4); margin-bottom: 8px; }
+  .cache-layer-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 12px; color: var(--text-dim); }
+  .cache-layer-cost { font-size: 10px; opacity: 0.45; }
+  .cache-flush-btn {
+    padding: 3px 10px; font-size: 10px; border-radius: 3px; cursor: pointer; transition: all 0.15s;
+    background: rgba(180,130,50,0.1); border: 1px solid rgba(180,130,50,0.2); color: rgba(184,144,42,0.6);
+  }
+  .cache-flush-btn:hover { background: rgba(180,130,50,0.2); border-color: rgba(180,130,50,0.35); }
+  .cache-flush-all {
+    margin-top: 8px; width: 100%; padding: 6px; font-size: 11px; border-radius: 3px; cursor: pointer;
+    background: rgba(200,80,80,0.08); border: 1px solid rgba(200,80,80,0.2); color: #c08080; transition: all 0.15s;
+  }
+  .cache-flush-all:hover { background: rgba(200,80,80,0.15); border-color: rgba(200,80,80,0.35); }
+  .library-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--text-dim); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; }
+  .library-divider::before, .library-divider::after { content: ""; flex: 1; border-top: 1px solid rgba(180,130,50,0.12); }
+
   /* Chapter list */
   .chapter-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
   .chapter-list::-webkit-scrollbar { width: 4px; }
@@ -753,7 +871,12 @@ function UploadPhase({ onParsed }) {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [library, setLibrary] = useState([]);
+  const [expandedBook, setExpandedBook] = useState(null);
+  const [flushed, setFlushed] = useState({}); // { "hash-layer": true } for brief confirmation
   const inputRef = useRef();
+
+  useEffect(() => { getBookIndex().then(setLibrary); }, []);
 
   async function handleFile(file) {
     if (!file) return;
@@ -766,16 +889,88 @@ function UploadPhase({ onParsed }) {
       if (!chapters.length) throw new Error("Couldn't find any chapters in this file.");
       const fullText = chapters.map(c => c.text).join("\n\n");
       const bookTitle = file.name.replace(/\.[^.]+$/, "");
-      onParsed({ chapters, bookTitle, fullText });
+      const bookData = { chapters, bookTitle, fullText };
+      await saveBookToLibrary(bookData);
+      onParsed(bookData);
     } catch (e) {
       setError(e.message);
     }
     setLoading(false);
   }
 
+  async function handleSelectBook(hash) {
+    setLoading(true); setError(null);
+    try {
+      const bookData = await loadBookFromLibrary(hash);
+      if (!bookData) throw new Error("Book data not found in cache. Please re-upload.");
+      onParsed(bookData);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  }
+
+  async function handleDeleteBook(e, hash) {
+    e.stopPropagation();
+    await deleteBookFromLibrary(hash);
+    setExpandedBook(null);
+    setLibrary(await getBookIndex());
+  }
+
+  async function handleFlush(e, hash, layer) {
+    e.stopPropagation();
+    const bookData = await loadBookFromLibrary(hash);
+    if (!bookData) return;
+    if (layer === "bible" || layer === "all") await flushStoryBible(hash);
+    if (layer === "illustrations" || layer === "all") await flushIllustrationCaches(bookData);
+    if (layer === "words" || layer === "all") await flushWordCaches(bookData);
+    setFlushed(prev => ({ ...prev, [`${hash}-${layer}`]: true }));
+    setTimeout(() => setFlushed(prev => { const n = { ...prev }; delete n[`${hash}-${layer}`]; return n; }), 1500);
+  }
+
   return (
     <div className="card">
       <div className="card-body">
+        {library.length > 0 && (
+          <div className="book-library">
+            <div className="book-library-label">Your books</div>
+            {library.map(b => (
+              <div key={b.hash} className="book-entry">
+                <div className="book-item" onClick={() => handleSelectBook(b.hash)}>
+                  <div className="book-item-info">
+                    <div className="book-item-title">{b.title}</div>
+                    <div className="book-item-meta">{b.chapterCount} chapter{b.chapterCount !== 1 ? "s" : ""}</div>
+                  </div>
+                  <div className="book-item-actions">
+                    <button className="book-item-btn kebab" onClick={e => { e.stopPropagation(); setExpandedBook(expandedBook === b.hash ? null : b.hash); }} title="Cache settings">...</button>
+                    <button className="book-item-btn remove" onClick={e => handleDeleteBook(e, b.hash)} title="Remove book and all cached data">&times;</button>
+                  </div>
+                </div>
+                {expandedBook === b.hash && (
+                  <div className="book-cache-panel" onClick={e => e.stopPropagation()}>
+                    <div className="cache-panel-label">Flush cached data</div>
+                    {[
+                      { layer: "bible", label: "Story Bible", cost: "slowest to regenerate" },
+                      { layer: "illustrations", label: "Illustrations", cost: "moderate" },
+                      { layer: "words", label: "Word Lists", cost: "fast" },
+                    ].map(({ layer, label, cost }) => (
+                      <div key={layer} className="cache-layer-row">
+                        <span>{label} <span className="cache-layer-cost">({cost})</span></span>
+                        <button className="cache-flush-btn" onClick={e => handleFlush(e, b.hash, layer)}>
+                          {flushed[`${b.hash}-${layer}`] ? "done" : "flush"}
+                        </button>
+                      </div>
+                    ))}
+                    <button className="cache-flush-all" onClick={e => handleFlush(e, b.hash, "all")}>
+                      {flushed[`${b.hash}-all`] ? "All cleared" : "Flush All"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+            <div className="library-divider">or upload a new book</div>
+          </div>
+        )}
         <div
           className={`upload-zone ${dragging ? "drag-over" : ""}`}
           onClick={() => inputRef.current.click()}
@@ -785,7 +980,7 @@ function UploadPhase({ onParsed }) {
         >
           <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} />
           {loading ? (
-            <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Parsing your book…</p></>
+            <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Loading…</p></>
           ) : (
             <>
               <div className="upload-icon">📖</div>
@@ -1217,7 +1412,7 @@ async function loadImagesFromTarball(file) {
   return imageMap;
 }
 
-function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, onReady }) {
+function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, chapterText, onReady }) {
   const [status, setStatus] = useState("working");
   const [imgStatus, setImgStatus] = useState("pending");
   const [errorMsg, setErrorMsg] = useState(null);
@@ -1238,13 +1433,35 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, 
         // 2. Pre-uploaded tarball: apply images immediately
         // 3. No images: offer upload or skip
 
+        // Illustration cache helpers
+        const chHash = chapterText ? await hashText(chapterText) : null;
+
+        async function getCachedImage(word) {
+          if (!chHash) return null;
+          const cached = await storageGet(`illust-${chHash}-${word.toLowerCase().trim()}`);
+          return cached ? cached.dataUri : null;
+        }
+
+        async function cacheImage(word, dataUri) {
+          if (!chHash || !dataUri) return;
+          const w = word.toLowerCase().trim();
+          await storageSet(`illust-${chHash}-${w}`, { dataUri, model: geminiModel, generatedAt: new Date().toISOString() });
+          // Maintain index for flush
+          const indexKey = `illust-index-${chHash}`;
+          const idx = (await storageGet(indexKey)) || [];
+          if (!idx.includes(w)) { idx.push(w); await storageSet(indexKey, idx); }
+        }
+
         const geminiAvailable = await checkGeminiAvailable();
         if (geminiAvailable) {
           // ── Live: generate images via Gemini proxy ───────────────────────────
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
+              const cached = await getCachedImage(a.word);
+              if (cached) return { ...a, image: cached };
               const img = await generateGeminiImageDirect(a.imagePrompt, geminiModel);
+              await cacheImage(a.word, img);
               return { ...a, image: img };
             })
           );
@@ -1253,9 +1470,10 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, 
 
         } else if (tarballImages && Object.keys(tarballImages).length > 0) {
           // ── Artifact: use pre-uploaded tarball ──────────────────────────────
-          const withImages = assetsWithPrompts.map(a => ({
-            ...a,
-            image: tarballImages[a.word] || null,
+          const withImages = await Promise.all(assetsWithPrompts.map(async a => {
+            const img = tarballImages[a.word] || null;
+            if (img) await cacheImage(a.word, img);
+            return { ...a, image: img };
           }));
           console.log(`Applied ${withImages.filter(a => a.image).length} tarball images`);
           setImgStatus("done");
@@ -1742,6 +1960,7 @@ export default function App() {
             bible={storyBible}
             tarballImages={tarballImages}
             geminiModel={chosenGeminiModel}
+            chapterText={chapter.text}
             onReady={assets => { setGameAssets(assets); setPhase("game"); }}
           />
         )}
