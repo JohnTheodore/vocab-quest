@@ -594,6 +594,7 @@ const STYLES = `
   .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
   .opt-btn.eliminated { opacity: 0.28; cursor: not-allowed; background: rgba(255,255,255,0.01); border-color: rgba(180,130,50,0.08); color: rgba(200,180,140,0.4); text-decoration: line-through; text-decoration-color: rgba(200,180,140,0.2); }
   .opt-btn.blank-opt { font-family: "Playfair Display", serif; font-style: italic; font-size: 14.5px; }
+  .options-grid.blank-options { grid-template-columns: 1fr; max-width: 360px; }
   .blank-word { display: inline-block; background: rgba(180,130,50,0.12); border-bottom: 2px solid rgba(180,130,50,0.5); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
   .opt-btn:disabled:not(.correct):not(.wrong) { opacity: 0.5; cursor: default; }
   .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(180,130,50,0.45); margin-bottom: 3px; font-style: normal; }
@@ -1410,7 +1411,7 @@ function BlankCard({ asset, onCorrect }) {
         </div>
       </div>
       <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
-        <div className="options-grid">
+        <div className="options-grid blank-options">
           {blankOptions.map((opt, i) => {
             let cls = "opt-btn blank-opt";
             if (phase === "correct" && opt.isCorrect) cls += " correct";
