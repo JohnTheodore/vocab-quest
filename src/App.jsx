@@ -1,20 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { recordSession, exportData } from "./wordRecords.js";
 
-// ── API key helpers ───────────────────────────────────────────────────────────
-function getAnthropicKey() {
-  try { const k = import.meta.env?.VITE_ANTHROPIC_API_KEY; if (k) return k; } catch {}
-  return window.ANTHROPIC_API_KEY || "";
-}
-
-function getGeminiKey() {
-  try { const k = import.meta.env?.VITE_GEMINI_API_KEY; if (k) return k; } catch {}
-  return null;
-}
-
-// Are we running locally (Vite dev server with Express backend)?
-function isLocal() {
-  try { return !!import.meta.env?.DEV; } catch { return false; }
+// Is live Gemini image generation available? Asks the server so this works in prod too.
+let _geminiAvailableCache = null;
+async function checkGeminiAvailable() {
+  if (_geminiAvailableCache !== null) return _geminiAvailableCache;
+  try {
+    const res = await fetch('/api/gemini-available');
+    const data = await res.json();
+    _geminiAvailableCache = !!data.available;
+  } catch (e) {
+    console.warn('[Gemini] Could not reach /api/gemini-available:', e.message);
+    _geminiAvailableCache = false;
+  }
+  return _geminiAvailableCache;
 }
 
 
@@ -240,22 +239,17 @@ async function getStoryBible(fullText, bookTitle, onStatus) {
 
 
 
-// ── Direct Gemini image generation (local Vite only — no CSP restrictions) ────
+// ── Gemini image generation (proxied through Express server) ─────────────────
 async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-image") {
-  const apiKey = getGeminiKey();
-  if (!apiKey) return null;
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseModalities: ["Image"] },
-        }),
-      }
-    );
+    const res = await fetch(`/api/gemini/${modelId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ["Image"] },
+      }),
+    });
     const data = await res.json();
     if (data.error) { console.warn("Gemini error:", data.error.message); return null; }
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -263,7 +257,7 @@ async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-ima
     if (!imgPart) { console.warn("Gemini: no image in response"); return null; }
     return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
   } catch (e) {
-    console.warn("Gemini direct fetch failed:", e.message);
+    console.warn("Gemini fetch failed:", e.message);
     return null;
   }
 }
@@ -277,23 +271,15 @@ async function claudeJSON(prompt, system = "", maxTokens = 2000) {
   };
   if (system) body.system = system;
 
-  // Local (Codespace/Vite): route through Express + Agent SDK (claude login auth)
-  // Artifact (claude.ai): call Anthropic directly with injected key
-  const url = isLocal() ? "/api/claude" : "https://api.anthropic.com/v1/messages";
-  const headers = isLocal()
-    ? { "Content-Type": "application/json" }
-    : {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "x-api-key": getAnthropicKey(),
-      };
+  const url = "/api/claude";
+  const headers = { "Content-Type": "application/json" };
 
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
   });
+  if (res.status === 401) { window.location.href = '/login'; return; }
   const data = await res.json();
   if (data.error) throw new Error(`API error: ${data.error.message}`);
   const raw = (data.content || []).map(b => b.text || "").join("");
@@ -574,7 +560,9 @@ const STYLES = `
   /* Game */
   @keyframes imgFade { from{opacity:0} to{opacity:1} }
   .illustration-area { width: 100%; background: #0a0704; overflow: hidden; }
-  .illustration-area img { width: 100%; height: auto; display: block; animation: imgFade 0.8s ease; }
+  /* max-height + object-fit:contain keeps the full image visible without cropping,
+     capped at 28vh so the rest of the question card fits on screen without scrolling */
+  .illustration-area img { width: 100%; height: auto; max-height: 28vh; object-fit: contain; display: block; animation: imgFade 0.8s ease; }
   @keyframes imgFade { from{opacity:0} to{opacity:1} }
   .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(180,130,50,0.1); display: flex; align-items: baseline; gap: 14px; }
   .vocab-word { font-family: 'Playfair Display', serif; font-size: 34px; font-weight: 700; color: var(--gold); }
@@ -635,6 +623,80 @@ const STYLES = `
   .spinner { width: 32px; height: 32px; border: 2px solid rgba(180,130,50,0.15); border-top-color: rgba(180,130,50,0.7); border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to{transform:rotate(360deg)} }
   .mini-spinner { width: 14px; height: 14px; border: 1.5px solid rgba(180,130,50,0.15); border-top-color: rgba(180,130,50,0.6); border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+  /* ── Tablet responsive ──────────────────────────────────────────────────── */
+
+  /* Touch targets: raise all interactive elements to ≥44px on touch screens */
+  @media (pointer: coarse) {
+    .chapter-btn { padding: 14px 16px; min-height: 44px; }
+    .opt-btn { padding: 14px 14px; min-height: 44px; }
+    .next-btn { padding: 16px; min-height: 44px; }
+    .primary-btn { padding: 14px 28px; min-height: 44px; }
+    .secondary-btn { padding: 11px 20px; min-height: 44px; }
+    .count-btn { width: 44px; height: 44px; font-size: 20px; }
+    .count-val { width: 44px; }
+    .word-suggestion { padding: 16px 16px; }
+    .ws-check { width: 24px; height: 24px; font-size: 15px; }
+  }
+
+  /* Small tablets and up (≥600px): expand card and breathing room */
+  @media (min-width: 600px) {
+    .card { max-width: 720px; }
+    .app { padding: 40px 24px 80px; }
+  }
+
+  /* Portrait tablet and up (≥768px): larger layout, more readable type */
+  @media (min-width: 768px) {
+    .card { max-width: 800px; }
+    .app { padding: 48px 32px 80px; }
+    .card-body { padding: 32px 40px 40px; }
+    .card-section { padding: 26px 40px; }
+    .word-banner { padding: 20px 40px 16px; }
+    .chapter-list { max-height: 560px; }
+    .opt-btn { font-size: 14.5px; line-height: 1.5; }
+    .opt-btn.blank-opt { font-size: 15.5px; }
+    .vocab-word { font-size: 38px; }
+    .question-text { font-size: 18px; }
+    .paragraph-text { font-size: 16px; }
+    .options-grid { gap: 12px; }
+    .gen-grid { gap: 12px; }
+    .upload-zone { padding: 56px 32px; }
+    .upload-zone h2 { font-size: 22px; }
+    .ws-word { font-size: 18px; }
+    .ws-reason { font-size: 13.5px; }
+  }
+
+  /* Landscape tablet and up (≥1024px): make use of the wider viewport */
+  @media (min-width: 1024px) {
+    .card { max-width: 860px; }
+    .app { padding: 56px 40px 80px; }
+    .options-grid { gap: 14px; }
+    .app-title { margin-bottom: 44px; }
+    .app-title h1 { font-size: 32px; }
+  }
+
+  /* .game-active is added to .app only during the question phase (see App render below).
+     All rules here are scoped to game-active so they don't affect any other page.
+     The goal is to fit the full question card on one screen without scrolling on a tablet,
+     both portrait and landscape, by reducing padding and font sizes from their default values. */
+  .app.game-active { padding-top: 14px; padding-bottom: 14px; }
+  .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
+  .app.game-active .card-section:last-child { padding-bottom: 20px; }
+  .app.game-active .word-banner { padding-top: 12px; padding-bottom: 10px; }
+  .app.game-active .question-text { font-size: 15px; margin-bottom: 10px; }
+  .app.game-active .paragraph-text { font-size: 13.5px; line-height: 1.6; }
+  .app.game-active .vocab-word { font-size: 28px; }
+  .app.game-active .options-grid { gap: 8px; }
+  .app.game-active .opt-btn { padding: 10px 12px; font-size: 13px; min-height: 0; }
+  @media (min-width: 768px) {
+    .app.game-active .opt-btn { font-size: 13.5px; }
+    .app.game-active .question-text { font-size: 16px; }
+    .app.game-active .paragraph-text { font-size: 14px; }
+  }
+  /* Landscape tablets have less vertical room (~768px height); shrink image further */
+  @media (max-height: 800px) {
+    .app.game-active .illustration-area img { max-height: 20vh; }
+  }
 `;
 
 // ── Highlight word in paragraph ───────────────────────────────────────────────
@@ -760,8 +822,13 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
   const [error, setError] = useState(null);
   const [tarballImages, setTarballImages] = useState(null); // preloaded image map
   const [tarballStatus, setTarballStatus] = useState(null); // null | "loading" | "ready" | "error"
+  const [geminiAvailable, setGeminiAvailable] = useState(false);
   const tarballInputRef = useRef();
   const SUGGEST_N = 5;
+
+  useEffect(() => {
+    checkGeminiAvailable().then(setGeminiAvailable);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -912,7 +979,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </div>
           ))}
         </div>
-        {exportJson && !isLocal() && (
+        {exportJson && !geminiAvailable && (
           <div style={{marginTop:16,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)"}}>
@@ -938,7 +1005,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
           </div>
         )}
         {/* Tarball upload — only shown when Gemini is not directly accessible */}
-        {!(isLocal() && getGeminiKey()) && (
+        {!geminiAvailable && (
         <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
           border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
@@ -1134,16 +1201,16 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
         }));
 
         // Three-way image path:
-        // 1. Local (Vite): call Gemini directly — no CSP restrictions
-        // 2. Artifact with pre-uploaded tarball: apply images immediately
-        // 3. Artifact without tarball: offer upload or skip
+        // 1. Gemini available (server has key): call Gemini directly
+        // 2. Pre-uploaded tarball: apply images immediately
+        // 3. No images: offer upload or skip
 
-        if (isLocal() && getGeminiKey()) {
-          // ── Local: generate images live via Gemini ──────────────────────────
+        const geminiAvailable = await checkGeminiAvailable();
+        if (geminiAvailable) {
+          // ── Live: generate images via Gemini proxy ───────────────────────────
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
-              console.log('[image prompt]', a.imagePrompt);
               const img = await generateGeminiImageDirect(a.imagePrompt);
               return { ...a, image: img };
             })
@@ -1299,7 +1366,7 @@ function BlankCard({ asset, onCorrect }) {
       </div>
       <div className="card-section">
         <div className="section-label">Definition</div>
-        <div style={{fontSize:15,color:"var(--text)",lineHeight:1.7,fontStyle:"italic",color:"var(--gold-dim)"}}>
+        <div style={{fontSize:15,lineHeight:1.7,fontStyle:"italic",color:"var(--gold-dim)"}}>
           {asset.options.options[asset.options.correct]}
         </div>
       </div>
@@ -1537,12 +1604,12 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
         <div style={{fontSize:13,color:"var(--gold-dim)",marginBottom:24,fontStyle:"italic"}}>{chapterTitle} · {bookTitle}</div>
 
         {/* Two-column header */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,margin:"0 auto 6px",maxWidth:380}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,margin:"0 auto 6px",maxWidth:560}}>
           <div style={{fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)",textAlign:"left",paddingLeft:16}}>Word → Meaning</div>
           <div style={{fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)",textAlign:"left",paddingLeft:16}}>Fill in the Blank</div>
         </div>
 
-        <div style={{display:"flex",flexDirection:"column",gap:6,margin:"0 auto 24px",maxWidth:380}}>
+        <div style={{display:"flex",flexDirection:"column",gap:6,margin:"0 auto 24px",maxWidth:560}}>
           {assets.map(a => {
             const ms = scores[a.word]?.meaning || "wrong";
             const bs = scores[a.word]?.blank   || "wrong";
@@ -1587,11 +1654,15 @@ export default function App() {
   return (
     <>
       <style>{STYLES}</style>
-      <div className="app">
-        <div className="app-title">
-          <h1>Vocabulary Quest</h1>
-          <p>Learn words from the books you love</p>
-        </div>
+      {/* game-active class tightens spacing so the question card fits without scrolling on a tablet */}
+      <div className={`app${phase === "game" ? " game-active" : ""}`}>
+        {/* Hide the title on the question page — it wastes vertical space needed to fit the card */}
+        {phase !== "game" && (
+          <div className="app-title">
+            <h1>Vocabulary Quest</h1>
+            <p>Learn words from the books you love</p>
+          </div>
+        )}
 
         {phase === "upload" && (
           <UploadPhase onParsed={data => { setBookData(data); setPhase("bible"); }}/>
