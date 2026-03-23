@@ -707,7 +707,7 @@ const STYLES = `
 
   /* Landscape: image on the left, question content on the right */
   @media (orientation: landscape) {
-    .app.game-active > .card { flex-direction: row; }
+    .app.game-active > .card:has(.illustration-area) { flex-direction: row; }
     .app.game-active .illustration-area { flex: 0 0 45%; max-width: 45%; height: 100%; }
     .app.game-active .illustration-area img { height: 100%; width: 100%; }
     .app.game-active .game-content { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
