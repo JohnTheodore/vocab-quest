@@ -1,81 +1,72 @@
 /**
  * Vocabulary Quest — API Server
  *
- * Proxies Claude API calls through the @anthropic-ai/claude-agent-sdk,
- * which picks up authentication from `claude login` automatically.
- * No ANTHROPIC_API_KEY needed — uses your Claude Pro subscription.
+ * Proxies Claude API calls to api.anthropic.com using the OAuth access token
+ * stored in .env as ANTHROPIC_ACCESS_TOKEN.
  *
  * Run alongside Vite: npm run dev
  * Or standalone:      npm run server
  */
 
 import express from 'express';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+// ── Load .env manually (no dotenv dependency needed) ─────────────────────────
+try {
+  const envPath = resolve(process.cwd(), '.env');
+  const lines = readFileSync(envPath, 'utf8').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const val = trimmed.slice(idx + 1).trim();
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
+} catch {}
+
+const ANTHROPIC_TOKEN = process.env.ANTHROPIC_ACCESS_TOKEN;
+if (!ANTHROPIC_TOKEN) {
+  console.error('ERROR: ANTHROPIC_ACCESS_TOKEN is not set in .env');
+  process.exit(1);
+}
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 // ── /api/claude — drop-in replacement for api.anthropic.com/v1/messages ───────
 app.post('/api/claude', async (req, res) => {
-  const { messages, system, max_tokens = 4000, model } = req.body;
-
-  // Build the prompt from the messages array
-  // The Agent SDK takes a simple string prompt, so we flatten the conversation
-  const userMessage = messages?.findLast(m => m.role === 'user')?.content || '';
-  const prompt = typeof userMessage === 'string'
-    ? userMessage
-    : userMessage.map(b => b.text || '').join('');
-
-  if (!prompt) {
-    return res.status(400).json({ error: { message: 'No user message found' } });
-  }
+  const { messages, system, max_tokens = 4000, model = 'claude-sonnet-4-20250514' } = req.body;
 
   try {
-    let fullText = '';
-
-    // query() uses Claude Code's runtime — authenticated via `claude login`
-    // It picks up credentials from ~/.claude/credentials automatically
-    for await (const message of query({
-      prompt,
-      options: {
-        // Pass system prompt if provided
-        ...(system ? { appendSystemPrompt: system } : {}),
-        // Disable all file/shell tools — we only need text responses
-        allowedTools: [],
-        // Don't write any files to disk
-        permissionMode: 'bypassPermissions',
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ANTHROPIC_TOKEN}`,
+        'anthropic-version': '2023-06-01',
       },
-    })) {
-      // Collect text from assistant messages
-      if (message.type === 'assistant') {
-        const textBlocks = message.message?.content?.filter(b => b.type === 'text') || [];
-        fullText += textBlocks.map(b => b.text).join('');
-      }
-
-      // result message signals completion
-      if (message.type === 'result') {
-        if (message.is_error) {
-          return res.status(500).json({ error: { message: message.result || 'Agent error' } });
-        }
-      }
-    }
-
-    if (res.headersSent) return;
-    if (!fullText) {
-      return res.status(500).json({ error: { message: 'Empty response from agent' } });
-    }
-    // Return in the same shape as api.anthropic.com/v1/messages
-    // so the React app needs no changes to parse the response
-    res.json({
-      content: [{ type: 'text', text: fullText }],
-      stop_reason: 'end_turn',
+      body: JSON.stringify({
+        model,
+        max_tokens,
+        ...(system ? { system } : {}),
+        messages,
+      }),
     });
 
-  } catch (err) {
-    console.error('Agent SDK error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: { message: err.message || 'Server error' } });
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: data.error || { message: 'Anthropic API error' } });
     }
+
+    res.json(data);
+
+  } catch (err) {
+    console.error('Claude API error:', err);
+    res.status(500).json({ error: { message: err.message || 'Server error' } });
   }
 });
 
@@ -87,5 +78,5 @@ app.get('/api/health', (req, res) => {
 const PORT = 3001;
 app.listen(PORT, () => {
   console.log(`Vocab Quest API server running on http://localhost:${PORT}`);
-  console.log('Using Claude Code credentials from: claude login');
+  console.log('Using Claude credentials from: .env (ANTHROPIC_ACCESS_TOKEN)');
 });
