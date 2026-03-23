@@ -1046,7 +1046,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
         )}
 
         <div style={{marginTop:12,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10}}>
-          {getGeminiKey() && (
+          {geminiAvailable && (
             <select
               value={geminiModel}
               onChange={e => { setGeminiModel(e.target.value); localStorage.setItem(GEMINI_MODEL_KEY, e.target.value); }}
