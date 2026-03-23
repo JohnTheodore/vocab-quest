@@ -1,17 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { recordSession, exportData } from "./wordRecords.js";
 
-// ── API key helpers ───────────────────────────────────────────────────────────
-function getAnthropicKey() {
-  try { const k = import.meta.env?.VITE_ANTHROPIC_API_KEY; if (k) return k; } catch {}
-  return window.ANTHROPIC_API_KEY || "";
-}
-
-function getGeminiKey() {
-  try { const k = import.meta.env?.VITE_GEMINI_API_KEY; if (k) return k; } catch {}
-  return null;
-}
-
 // Are we running locally (Vite dev server with Express backend)?
 function isLocal() {
   try { return !!import.meta.env?.DEV; } catch { return false; }
@@ -240,22 +229,17 @@ async function getStoryBible(fullText, bookTitle, onStatus) {
 
 
 
-// ── Direct Gemini image generation (local Vite only — no CSP restrictions) ────
+// ── Gemini image generation (proxied through Express server) ─────────────────
 async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-image") {
-  const apiKey = getGeminiKey();
-  if (!apiKey) return null;
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseModalities: ["Image"] },
-        }),
-      }
-    );
+    const res = await fetch(`/api/gemini/${modelId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ["Image"] },
+      }),
+    });
     const data = await res.json();
     if (data.error) { console.warn("Gemini error:", data.error.message); return null; }
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -263,7 +247,7 @@ async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-ima
     if (!imgPart) { console.warn("Gemini: no image in response"); return null; }
     return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
   } catch (e) {
-    console.warn("Gemini direct fetch failed:", e.message);
+    console.warn("Gemini fetch failed:", e.message);
     return null;
   }
 }
@@ -277,23 +261,15 @@ async function claudeJSON(prompt, system = "", maxTokens = 2000) {
   };
   if (system) body.system = system;
 
-  // Local (Codespace/Vite): route through Express + Agent SDK (claude login auth)
-  // Artifact (claude.ai): call Anthropic directly with injected key
-  const url = isLocal() ? "/api/claude" : "https://api.anthropic.com/v1/messages";
-  const headers = isLocal()
-    ? { "Content-Type": "application/json" }
-    : {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "x-api-key": getAnthropicKey(),
-      };
+  const url = "/api/claude";
+  const headers = { "Content-Type": "application/json" };
 
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
   });
+  if (res.status === 401) { window.location.href = '/login'; return; }
   const data = await res.json();
   if (data.error) throw new Error(`API error: ${data.error.message}`);
   const raw = (data.content || []).map(b => b.text || "").join("");
@@ -1014,7 +990,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
           </div>
         )}
         {/* Tarball upload — only shown when Gemini is not directly accessible */}
-        {!(isLocal() && getGeminiKey()) && (
+        {!(isLocal()) && (
         <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
           border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
@@ -1214,7 +1190,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
         // 2. Artifact with pre-uploaded tarball: apply images immediately
         // 3. Artifact without tarball: offer upload or skip
 
-        if (isLocal() && getGeminiKey()) {
+        if (isLocal()) {
           // ── Local: generate images live via Gemini ──────────────────────────
           setImgStatus("generating");
           const withImages = await Promise.all(
@@ -1375,7 +1351,7 @@ function BlankCard({ asset, onCorrect }) {
       </div>
       <div className="card-section">
         <div className="section-label">Definition</div>
-        <div style={{fontSize:15,color:"var(--text)",lineHeight:1.7,fontStyle:"italic",color:"var(--gold-dim)"}}>
+        <div style={{fontSize:15,lineHeight:1.7,fontStyle:"italic",color:"var(--gold-dim)"}}>
           {asset.options.options[asset.options.correct]}
         </div>
       </div>
