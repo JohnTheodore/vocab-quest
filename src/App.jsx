@@ -246,13 +246,19 @@ const GEMINI_IMAGE_MODELS = [
   { id: "gemini-3-pro-image-preview",     label: "Gemini 3 Pro (best quality)" },
 ];
 const GEMINI_MODEL_KEY = "vocab-gemini-model";
+function getImageAspectHint() {
+  const isLandscape = window.matchMedia("(orientation: landscape)").matches;
+  return isLandscape ? "3:4 portrait orientation" : "3:2 landscape orientation";
+}
+
 async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-image") {
+  const aspectHint = getImageAspectHint();
   try {
     const res = await fetch(`/api/gemini/${modelId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: `${prompt}\n\nGenerate this image in ${aspectHint} aspect ratio.` }] }],
         generationConfig: { responseModalities: ["Image"] },
       }),
     });
