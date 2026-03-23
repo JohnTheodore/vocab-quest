@@ -1211,7 +1211,6 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
-              console.log('[image prompt]', a.imagePrompt);
               const img = await generateGeminiImageDirect(a.imagePrompt);
               return { ...a, image: img };
             })
