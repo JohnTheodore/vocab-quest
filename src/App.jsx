@@ -689,6 +689,7 @@ const STYLES = `
   .app.game-active > .card { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .app.game-active .illustration-area { flex: 1; min-height: 0; display: flex; align-items: center; }
   .app.game-active .illustration-area img { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+  .app.game-active .game-content { display: contents; }
   .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
   .app.game-active .card-section:last-child { padding-bottom: 20px; }
   .app.game-active .word-banner { padding-top: 12px; padding-bottom: 10px; }
@@ -701,6 +702,14 @@ const STYLES = `
     .app.game-active .opt-btn { font-size: 13.5px; }
     .app.game-active .question-text { font-size: 16px; }
     .app.game-active .paragraph-text { font-size: 14px; }
+  }
+
+  /* Landscape: image on the left, question content on the right */
+  @media (orientation: landscape) {
+    .app.game-active > .card { flex-direction: row; }
+    .app.game-active .illustration-area { flex: 0 0 45%; max-width: 45%; height: 100%; }
+    .app.game-active .illustration-area img { height: 100%; width: 100%; }
+    .app.game-active .game-content { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
   }
 `;
 
@@ -1533,6 +1542,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
               <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
             </div>
           )}
+          <div className="game-content">
           <div className="word-banner">
             <span className="vocab-word">{current.word}</span>
           </div>
@@ -1577,6 +1587,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
                 </button>
               </>
             )}
+          </div>
           </div>
         </div>
       )}
