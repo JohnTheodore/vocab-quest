@@ -683,9 +683,12 @@ const STYLES = `
 
   /* .game-active is added to .app only during the question phase (see App render below).
      All rules here are scoped to game-active so they don't affect any other page.
-     The goal is to fit the full question card on one screen without scrolling on a tablet,
-     both portrait and landscape, by reducing padding and font sizes from their default values. */
-  .app.game-active { padding-top: 14px; padding-bottom: 14px; }
+     The card is made a flex column filling the full viewport height so the illustration
+     can grow to fill all remaining space above the fixed-height question content. */
+  .app.game-active { padding-top: 14px; padding-bottom: 14px; height: 100dvh; box-sizing: border-box; justify-content: flex-start; }
+  .app.game-active > .card { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .app.game-active .illustration-area { flex: 1; min-height: 0; display: flex; align-items: center; }
+  .app.game-active .illustration-area img { width: 100%; height: 100%; max-height: none; object-fit: contain; }
   .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
   .app.game-active .card-section:last-child { padding-bottom: 20px; }
   .app.game-active .word-banner { padding-top: 12px; padding-bottom: 10px; }
@@ -698,10 +701,6 @@ const STYLES = `
     .app.game-active .opt-btn { font-size: 13.5px; }
     .app.game-active .question-text { font-size: 16px; }
     .app.game-active .paragraph-text { font-size: 14px; }
-  }
-  /* Landscape tablets have less vertical room (~768px height); shrink image further */
-  @media (max-height: 800px) {
-    .app.game-active .illustration-area img { max-height: 20vh; }
   }
 `;
 
