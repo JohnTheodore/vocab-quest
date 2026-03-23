@@ -1,9 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { recordSession, exportData } from "./wordRecords.js";
 
-// Are we running locally (Vite dev server with Express backend)?
-function isLocal() {
-  try { return !!import.meta.env?.DEV; } catch { return false; }
+// Is live Gemini image generation available? Asks the server so this works in prod too.
+let _geminiAvailableCache = null;
+async function checkGeminiAvailable() {
+  if (_geminiAvailableCache !== null) return _geminiAvailableCache;
+  try {
+    const res = await fetch('/api/gemini-available');
+    const data = await res.json();
+    _geminiAvailableCache = !!data.available;
+  } catch (e) {
+    console.warn('[Gemini] Could not reach /api/gemini-available:', e.message);
+    _geminiAvailableCache = false;
+  }
+  return _geminiAvailableCache;
 }
 
 
@@ -812,8 +822,13 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
   const [error, setError] = useState(null);
   const [tarballImages, setTarballImages] = useState(null); // preloaded image map
   const [tarballStatus, setTarballStatus] = useState(null); // null | "loading" | "ready" | "error"
+  const [geminiAvailable, setGeminiAvailable] = useState(false);
   const tarballInputRef = useRef();
   const SUGGEST_N = 5;
+
+  useEffect(() => {
+    checkGeminiAvailable().then(setGeminiAvailable);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -964,7 +979,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             </div>
           ))}
         </div>
-        {exportJson && !isLocal() && (
+        {exportJson && !geminiAvailable && (
           <div style={{marginTop:16,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)"}}>
@@ -990,7 +1005,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
           </div>
         )}
         {/* Tarball upload — only shown when Gemini is not directly accessible */}
-        {!(isLocal()) && (
+        {!geminiAvailable && (
         <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
           border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
@@ -1186,12 +1201,13 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
         }));
 
         // Three-way image path:
-        // 1. Local (Vite): call Gemini directly — no CSP restrictions
-        // 2. Artifact with pre-uploaded tarball: apply images immediately
-        // 3. Artifact without tarball: offer upload or skip
+        // 1. Gemini available (server has key): call Gemini directly
+        // 2. Pre-uploaded tarball: apply images immediately
+        // 3. No images: offer upload or skip
 
-        if (isLocal()) {
-          // ── Local: generate images live via Gemini ──────────────────────────
+        const geminiAvailable = await checkGeminiAvailable();
+        if (geminiAvailable) {
+          // ── Live: generate images via Gemini proxy ───────────────────────────
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {

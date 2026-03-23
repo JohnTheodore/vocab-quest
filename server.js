@@ -14,6 +14,7 @@ import express from 'express';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { createHmac } from 'crypto';
+import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 // ── Load .env manually (no dotenv dependency needed) ─────────────────────────
@@ -178,7 +179,12 @@ app.post('/api/claude', async (req, res) => {
       options: {
         ...(system ? { appendSystemPrompt: system } : {}),
         allowedTools: [],
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'dontAsk',
+        // Railway has no `claude` binary in PATH, so we must spawn Claude using
+        // the same Node executable that's running this server.
+        spawnClaudeCodeProcess: ({ args, cwd, env, signal }) => {
+          return spawn(process.execPath, args, { cwd, env, signal, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        },
       },
     })) {
       if (message.type === 'assistant') {
@@ -212,9 +218,12 @@ app.post('/api/gemini/:model', async (req, res) => {
       }
     );
     const data = await response.json();
+    if (!response.ok) {
+      console.error(`Gemini API error: HTTP ${response.status} for model ${model}:`, JSON.stringify(data));
+    }
     res.status(response.status).json(data);
   } catch (err) {
-    console.error('Gemini API error:', err);
+    console.error('Gemini API network error:', err);
     res.status(500).json({ error: { message: err.message || 'Server error' } });
   }
 });
@@ -222,6 +231,11 @@ app.post('/api/gemini/:model', async (req, res) => {
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Gemini availability check
+app.get('/api/gemini-available', (_req, res) => {
+  res.json({ available: !!GEMINI_KEY });
 });
 
 // ── Serve static frontend in production ───────────────────────────────────────
@@ -232,10 +246,10 @@ if (existsSync(distPath)) {
   app.get('*', (_req, res) => res.sendFile(resolve(distPath, 'index.html')));
 }
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001; // Railway injects PORT at runtime
 app.listen(PORT, () => {
   console.log(`Vocab Quest API server running on http://localhost:${PORT}`);
   console.log(`Auth: ${AUTH_PASSWORD ? 'enabled' : 'disabled (set AUTH_PASSWORD to enable)'}`);
-  console.log('Claude: using credentials from ~/.claude/.credentials.json');
+  console.log(`Claude: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'using CLAUDE_CODE_OAUTH_TOKEN env var' : 'using ~/.claude/.credentials.json'}`);
   console.log(`Gemini: ${GEMINI_KEY ? 'configured' : 'NOT configured'}`);
 });
