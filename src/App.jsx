@@ -240,6 +240,12 @@ async function getStoryBible(fullText, bookTitle, onStatus) {
 
 
 // ── Gemini image generation (proxied through Express server) ─────────────────
+const GEMINI_IMAGE_MODELS = [
+  { id: "gemini-2.5-flash-image",        label: "Gemini 2.5 Flash (fast)" },
+  { id: "gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash (preview)" },
+  { id: "gemini-3-pro-image-preview",     label: "Gemini 3 Pro (best quality)" },
+];
+const GEMINI_MODEL_KEY = "vocab-gemini-model";
 async function generateGeminiImageDirect(prompt, modelId = "gemini-2.5-flash-image") {
   try {
     const res = await fetch(`/api/gemini/${modelId}`, {
@@ -823,6 +829,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
   const [tarballImages, setTarballImages] = useState(null); // preloaded image map
   const [tarballStatus, setTarballStatus] = useState(null); // null | "loading" | "ready" | "error"
   const [geminiAvailable, setGeminiAvailable] = useState(false);
+  const [geminiModel, setGeminiModel] = useState(() => localStorage.getItem(GEMINI_MODEL_KEY) || GEMINI_IMAGE_MODELS[0].id);
   const tarballInputRef = useRef();
   const SUGGEST_N = 5;
 
@@ -921,7 +928,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
 
   function handleStart() {
     const chosen = allWords.filter(w => selectedWords.includes(w.word));
-    onConfirm(chosen, tarballImages);
+    onConfirm(chosen, tarballImages, geminiModel);
   }
 
   if (loading) return (
@@ -1038,7 +1045,18 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
         </div>
         )}
 
-        <div style={{marginTop:12,display:"flex",justifyContent:"flex-end"}}>
+        <div style={{marginTop:12,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10}}>
+          {getGeminiKey() && (
+            <select
+              value={geminiModel}
+              onChange={e => { setGeminiModel(e.target.value); localStorage.setItem(GEMINI_MODEL_KEY, e.target.value); }}
+              style={{fontSize:12,padding:"6px 8px",background:"var(--card-bg)",color:"var(--text-dim)",border:"1px solid rgba(180,130,50,0.3)",borderRadius:3}}
+            >
+              {GEMINI_IMAGE_MODELS.map(m => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          )}
           <button className="primary-btn" disabled={!canStart} onClick={handleStart}>
             Generate Game ({selectedWords.length} words) →
           </button>
@@ -1184,7 +1202,7 @@ async function loadImagesFromTarball(file) {
   return imageMap;
 }
 
-function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
+function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, onReady }) {
   const [status, setStatus] = useState("working");
   const [imgStatus, setImgStatus] = useState("pending");
   const [errorMsg, setErrorMsg] = useState(null);
@@ -1211,7 +1229,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, onReady }) {
           setImgStatus("generating");
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
-              const img = await generateGeminiImageDirect(a.imagePrompt);
+              const img = await generateGeminiImageDirect(a.imagePrompt, geminiModel);
               return { ...a, image: img };
             })
           );
@@ -1648,6 +1666,7 @@ export default function App() {
   const [chapter, setChapter] = useState(null);
   const [chosenWords, setChosenWords] = useState([]);
   const [tarballImages, setTarballImages] = useState(null);
+  const [chosenGeminiModel, setChosenGeminiModel] = useState(GEMINI_IMAGE_MODELS[0].id);
   const [gameAssets, setGameAssets] = useState([]);
   const [scores, setScores] = useState({});
 
@@ -1690,7 +1709,7 @@ export default function App() {
             chapter={chapter}
             bookTitle={bookData.bookTitle}
             bible={storyBible}
-            onConfirm={(words, imageMap) => { setChosenWords(words); setTarballImages(imageMap || null); setPhase("generating"); }}
+            onConfirm={(words, imageMap, model) => { setChosenWords(words); setTarballImages(imageMap || null); setChosenGeminiModel(model); setPhase("generating"); }}
           />
         )}
 
@@ -1700,6 +1719,7 @@ export default function App() {
             bookTitle={bookData.bookTitle}
             bible={storyBible}
             tarballImages={tarballImages}
+            geminiModel={chosenGeminiModel}
             onReady={assets => { setGameAssets(assets); setPhase("game"); }}
           />
         )}
