@@ -1546,20 +1546,23 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
           <div className="word-banner">
             <span className="vocab-word">{current.word}</span>
           </div>
+          {phase !== "correct" && (
           <div className="card-section">
             <div className="section-label">From the text</div>
             <div className="paragraph-text">
               "<Highlighted paragraph={current.paragraph} word={current.word}/>"
             </div>
           </div>
+          )}
           <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
+            {phase !== "correct" && (
+            <>
             <div className="question-text">What does "{current.word}" mean?</div>
             <div className="options-grid">
               {current.options.options.map((opt, i) => {
                 let cls = "opt-btn";
-                if (phase === "correct" && i === current.options.correct) cls += " correct";
-                else if (wrongPicks.includes(i)) cls += " eliminated";
-                const disabled = phase === "correct" || wrongPicks.includes(i);
+                if (wrongPicks.includes(i)) cls += " eliminated";
+                const disabled = wrongPicks.includes(i);
                 return (
                   <button key={i} className={cls} onClick={() => handleSelect(i)} disabled={disabled}>
                     <span className="opt-letter">{String.fromCharCode(65+i)}</span>
@@ -1568,6 +1571,8 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
                 );
               })}
             </div>
+            </>
+            )}
 
             {phase === "hint" && (
               <div className="feedback-banner hint">
