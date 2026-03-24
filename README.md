@@ -12,32 +12,35 @@ The game has two rounds: **word → meaning** (guess the definition from context
 
 ![Vocabulary Quest — languidly](screenshot.jpg)
 
-*A vocabulary card for the word "languidly" from A Little Princess, with a Midjourney illustration, the original passage with the word highlighted, and four multiple-choice options.*
+*A vocabulary card for the word "languidly" from A Little Princess, with an illustration, the original passage with the word highlighted, and four multiple-choice options.*
 
 ---
 
 ### 3. How do I run it?
 
-**Quickest — no install needed:**
-
-Open the live artifact directly in Claude.ai. Word suggestion, quiz generation, and the Story Bible all work immediately. Images can be added via the offline workflow below.
-
-**In GitHub Codespaces (recommended for image generation):**
+**In GitHub Codespaces (recommended):**
 
 1. Click **Code → Codespaces → Create codespace on main**
-2. Wait ~2 minutes for the environment to build
-3. Add your API keys:
+2. Wait ~2 minutes for the dev container to build (Node 18, Python 3.12)
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
+4. Log in to Claude — this is how the app authenticates with the Claude API:
+   ```bash
+   claude login
+   ```
+   Follow the browser-based OAuth flow. Credentials are saved to `~/.claude/.credentials.json` and picked up automatically by the server.
+5. Add your Gemini key for image generation:
    ```bash
    cp .env.example .env
-   # Edit .env with your keys
+   # Edit .env — add your GEMINI_API_KEY
    ```
-4. Start the app:
+6. Start the app:
    ```bash
    npm run dev
    ```
-5. Click the forwarded port popup — Vocabulary Quest opens in your browser
-
-When running locally, images are generated automatically via the Gemini API — no manual steps needed.
+7. Click the forwarded-port popup (port 5173) — Vocabulary Quest opens in your browser
 
 **Locally on your machine:**
 
@@ -45,8 +48,8 @@ When running locally, images are generated automatically via the Gemini API — 
 git clone https://github.com/YOUR_USERNAME/vocab-quest.git
 cd vocab-quest
 npm install
-cp .env.example .env
-# Edit .env with your keys
+claude login          # authenticate with Claude
+cp .env.example .env  # add your GEMINI_API_KEY
 npm run dev
 ```
 
@@ -54,48 +57,59 @@ npm run dev
 
 ### 4. How do I configure it?
 
+#### Environment variables
+
 | Variable | Where to get it | Required for |
 |----------|----------------|--------------|
-| `VITE_ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys | Word suggestions, quiz generation, Story Bible |
-| `VITE_GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) → API Keys | Live image generation (local only) |
+| `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) → API Keys | Image generation |
+| `AUTH_PASSWORD` | You choose it | Password-protecting the app (production) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude login` output or CI secrets | Claude API in environments without `claude login` (e.g. Railway) |
 
 Copy `.env.example` to `.env` and fill in the values. The `.env` file is gitignored and will never be committed.
 
-**Note:** When running inside the Claude.ai artifact, no configuration is needed — the artifact uses injected keys tied to your Claude Pro session. Images in the artifact are loaded via an offline tarball workflow (see below).
+#### Claude authentication
 
-**Offline image generation (Claude.ai artifact):**
+The server proxies Claude requests through the `@anthropic-ai/claude-agent-sdk`, which reads credentials from `~/.claude/.credentials.json` (created by `claude login`). No Anthropic API key is needed — your Claude Pro/Max subscription is used directly.
 
-Since the artifact sandbox blocks direct calls to external APIs, images are generated separately using the included Docker script:
+For headless environments like Railway where you can't run `claude login`, set the `CLAUDE_CODE_OAUTH_TOKEN` environment variable instead (see the deployment section below).
 
-```bash
-# Build the image generator once
-docker build -t vocab-image-gen .
+#### Password authentication
 
-# Export words.json from the app's word selection screen, then run:
-docker run --rm \
-  -v "$(pwd):/data" \
-  vocab-image-gen \
-  --key YOUR_GEMINI_API_KEY \
-  --input words.json \
-  --output vocab-images.tar.gz
-```
-
-Upload `vocab-images.tar.gz` in the app before clicking **Generate Game**.
+When `AUTH_PASSWORD` is set, the app requires a password before granting access. This is cookie-based and stateless — no database needed. If `AUTH_PASSWORD` is not set, auth is disabled (convenient for local development).
 
 ---
 
-### 5. How does it work?
+### 5. Deploying to production (Railway)
 
-The app is a single React component (`src/App.jsx`) with eight sequential phases:
+The app is configured for [Railway](https://railway.app) out of the box via `railway.toml`:
+
+1. Create a new Railway project and connect your GitHub repo
+2. Set these environment variables in the Railway dashboard:
+
+   | Variable | Value |
+   |----------|-------|
+   | `GEMINI_API_KEY` | Your Google AI Studio key |
+   | `AUTH_PASSWORD` | A password to protect the app |
+   | `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token from `~/.claude/.credentials.json` (the `accessToken` field) |
+
+3. Deploy — Railway runs `npm run build` then `node server.js` automatically
+
+The server binds to `process.env.PORT` (injected by Railway at runtime) and serves the Vite-built frontend from `dist/`.
+
+---
+
+### 6. How does it work?
+
+The app is a React frontend (`src/App.jsx`) backed by an Express API server (`server.js`) that proxies calls to Claude and Gemini. It progresses through eight sequential phases:
 
 **Upload → Story Bible → Chapter Select → Word Suggestion → Asset Generation → Game → Results**
 
-- **EPUB/TXT parsing** — JSZip extracts chapter text client-side; no server needed
+- **EPUB/TXT parsing** — JSZip extracts chapter text client-side. Chapter titles are enriched from multiple sources (NCX metadata, HTML table-of-contents pages, and in-chapter headings) to show full names even when the epub's TOC only stores short labels
 - **Story Bible** — Claude reads up to 60,000 characters of the book and extracts character appearances and setting descriptions. Cached by SHA-256 hash of the book text — generated once, loaded instantly on return visits
 - **Word suggestion** — Claude identifies up to 20 SAT-level words per chapter that appear verbatim in the text, with character position verified client-side. Also cached per chapter
-- **Quiz generation** — A single Claude API call generates all quiz options and hints for the selected words at once
-- **Image prompts** — Built from the original passage + matching Story Bible character/setting descriptions + book-wide style constants, ensuring visual consistency across all illustrations
+- **Quiz generation** — A single Claude call generates all quiz options and hints for the selected words at once
+- **Image generation** — Prompts are built from the original passage + matching Story Bible character/setting descriptions + book-wide style constants, ensuring visual consistency. Images are generated via the Gemini API and cached in the browser
 - **Two-round game** — Round 1: word → meaning (keep trying with hints until correct). Round 2: fill in the blank (definition given, choose the correct word)
 - **Results** — Separate scores for each round, showing first-try vs. with-a-hint performance
 
-**Tech stack:** React 18, Vite, Anthropic Claude API, Google Gemini image API, JSZip, pako (TAR parsing)
+**Tech stack:** React 18, Vite, Express, Claude Agent SDK, Google Gemini image API, JSZip, pako
