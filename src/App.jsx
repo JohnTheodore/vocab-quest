@@ -37,6 +37,23 @@ function htmlToText(html) {
   return d.textContent.replace(/\s+/g, " ").trim();
 }
 
+// Extract the first heading (h1-h3) from chapter HTML as a candidate chapter title.
+// Many epubs have a full chapter title (e.g. "Chapter One: The Wrong Door") inside
+// the chapter's own HTML, even when the NCX/TOC metadata only stores a short label
+// like "One". We check h1 first (most common), then h2/h3 as fallbacks.
+function extractHeadingFromHtml(html) {
+  const d = document.createElement("div");
+  d.innerHTML = html;
+  for (const tag of ["h1", "h2", "h3"]) {
+    const el = d.querySelector(tag);
+    if (el) {
+      const text = el.textContent.replace(/\s+/g, " ").trim();
+      if (text.length > 0 && text.length < 200) return text;
+    }
+  }
+  return null;
+}
+
 async function parseEpub(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
@@ -63,7 +80,11 @@ async function parseEpub(file) {
     .map(ref => manifest[ref.getAttribute("idref")])
     .filter(Boolean);
 
-  // Get NCX or NAV for chapter titles
+  // --- Step 1: Parse NCX/NAV for chapter titles ---
+  // The NCX (EPUB2) or NAV (EPUB3) is the epub's official table of contents.
+  // However, many epubs — especially Calibre-produced ones — store only terse labels
+  // here (e.g. "One", "Two") while the full chapter names (e.g. "The Wrong Door")
+  // live elsewhere. We parse this first as a baseline, then enrich below.
   const ncxId = opfDoc.querySelector("spine")?.getAttribute("toc");
   const navHref = manifest["nav"] || manifest["toc"] || (ncxId ? manifest[ncxId] : null);
 
@@ -73,38 +94,141 @@ async function parseEpub(file) {
       const navPath = opfDir + navHref;
       const navFile = zip.file(navPath) || zip.file(navHref);
       if (navFile) {
-        const navHtml = await navFile.async("text");
-        const navDoc = parser.parseFromString(navHtml, "text/html");
-        // Try HTML nav element first, then NCX navPoints
-        const navLinks = navDoc.querySelectorAll("nav[epub\\:type='toc'] a, nav a, navPoint");
-        navLinks.forEach(el => {
-          const title = el.textContent.trim();
-          const href = el.getAttribute("href") || el.querySelector("content")?.getAttribute("src") || "";
-          if (title && href) tocEntries.push({ title, href: href.split("#")[0] });
-        });
+        const navRaw = await navFile.async("text");
+        // NCX files are XML but were previously parsed as "text/html", which caused
+        // querySelector("navPoint") to silently fail in some browsers. Detect format
+        // and parse with the correct mime type.
+        const isNcx = navHref.endsWith(".ncx") || navRaw.trimStart().startsWith("<?xml");
+        const navDoc = parser.parseFromString(navRaw, isNcx ? "application/xml" : "text/html");
+        if (isNcx) {
+          // EPUB2 NCX: <navPoint><navLabel><text>Title</text></navLabel><content src="file.html"/></navPoint>
+          navDoc.querySelectorAll("navPoint").forEach(np => {
+            const title = np.querySelector("navLabel > text")?.textContent?.trim() || "";
+            const href = np.querySelector("content")?.getAttribute("src") || "";
+            if (title && href) tocEntries.push({ title, href: href.split("#")[0] });
+          });
+        } else {
+          // EPUB3 HTML nav: <nav epub:type="toc"> containing <a> links
+          const navEl = navDoc.querySelector("nav[epub\\:type='toc']");
+          const links = navEl ? navEl.querySelectorAll("a") : navDoc.querySelectorAll("nav a");
+          links.forEach(el => {
+            const title = el.textContent.trim();
+            const href = el.getAttribute("href") || "";
+            if (title && href) tocEntries.push({ title, href: href.split("#")[0] });
+          });
+        }
       }
-    } catch (e) { /* fallback below */ }
+    } catch (e) { /* fallback: tocEntries stays empty, titles come from headings or fallback */ }
   }
 
-  // Read all spine files into text
-  const chapterTexts = [];
+  // --- Step 2: Read all spine files, caching raw HTML for reuse ---
+  // We cache raw HTML here so the HTML TOC scan (step 3) and heading extraction
+  // don't need to re-read files from the zip.
+  const spineFileCache = []; // [{href, html}]
   for (const href of spineItems) {
     try {
       const fullPath = opfDir + href;
       const f = zip.file(fullPath) || zip.file(href);
       if (!f) continue;
       const html = await f.async("text");
-      const text = htmlToText(html);
-      if (text.length > 200) chapterTexts.push({ href, text });
+      spineFileCache.push({ href, html });
+    } catch (e) { /* skip unreadable files */ }
+  }
+
+  // --- Step 3: Scan for an HTML table-of-contents page with richer titles ---
+  // Problem: many Calibre epubs have an NCX that only says "One", "Two", "Three",
+  // but include a styled HTML contents page (e.g. split_3.html) where each entry
+  // shows both the number AND the chapter name:
+  //   <div>
+  //     <p><a href="chapter04.html">One</a></p>
+  //     <p>The Wrong Door</p>
+  //   </div>
+  // We detect this page by looking for spine files where most <a> links point to
+  // other spine files (i.e. it's a navigation page, not a chapter). Then we extract
+  // the full text of each link's containing block element as the enriched title.
+  const htmlTocTitles = {}; // basename -> full title text from HTML TOC page
+  const spineBasenames = new Set(spineItems.map(s => s.split("/").pop()));
+  for (const { html } of spineFileCache) {
+    try {
+      // Skip real chapters (too large) and empty/tiny files
+      if (html.length > 50000 || html.length < 200) continue;
+      const doc = parser.parseFromString(html, "text/html");
+      const links = doc.querySelectorAll("a[href]");
+      if (links.length < 3) continue;
+      // Count how many links point to other spine files
+      let matchCount = 0;
+      links.forEach(a => {
+        const base = (a.getAttribute("href") || "").split("#")[0].split("/").pop();
+        if (base && spineBasenames.has(base)) matchCount++;
+      });
+      // Require majority of links to be internal — avoids matching bibliography/index pages
+      // that have a few spine links mixed with many external references
+      if (matchCount < 3 || matchCount < links.length * 0.5) continue;
+      // Found a TOC page — extract the full title from each link's tightest container.
+      // Prefer <li> (clean list TOCs) over <div> (Calibre-style) over <td> (table TOCs).
+      // The container's full textContent captures both "One" and "The Wrong Door"
+      // when they're siblings in the same block.
+      links.forEach(a => {
+        const rawHref = (a.getAttribute("href") || "").split("#")[0];
+        const base = rawHref.split("/").pop();
+        if (!base || !spineBasenames.has(base)) return;
+        const block = a.closest("li") || a.closest("div") || a.closest("td") || a.parentElement;
+        if (!block) return;
+        const fullText = block.textContent.replace(/\s+/g, " ").trim();
+        // Cap at 120 chars to reject cases where a wrapper div grabbed multiple entries
+        if (fullText.length > 0 && fullText.length < 120) {
+          htmlTocTitles[base] = fullText;
+        }
+      });
+      if (Object.keys(htmlTocTitles).length > 0) break; // Use first TOC page found
     } catch (e) { /* skip */ }
   }
 
-  // Match TOC titles to chapters
+  // --- Step 4: Build chapter list with text content and heading ---
+  const chapterTexts = [];
+  for (const { href, html } of spineFileCache) {
+    const text = htmlToText(html);
+    const heading = extractHeadingFromHtml(html);
+    // Filter out short files (cover pages, copyright, etc.)
+    if (text.length > 200) chapterTexts.push({ href, text, heading });
+  }
+
+  // --- Step 5: Assemble final chapter titles from best available source ---
+  // Three sources of chapter titles, in order of richness:
+  //   1. HTML TOC page (e.g. "One The Wrong Door") — richest, has number + name
+  //   2. Chapter heading (h1/h2/h3 inside the chapter's own HTML)
+  //   3. NCX/NAV entry (e.g. "One") — often the tersest
+  // We start with the NCX title as baseline and only upgrade when a richer source
+  // provides meaningfully more information (3+ extra characters). This ensures
+  // epubs that already have good NCX titles are never degraded.
   const chapters = chapterTexts.map((ch, i) => {
     const tocMatch = tocEntries.find(t => ch.href.endsWith(t.href) || ch.href.includes(t.href));
+    const tocTitle = tocMatch?.title || null;
+    const heading = ch.heading || null;
+    const chBase = ch.href.split("/").pop();
+    const htmlTocTitle = htmlTocTitles[chBase] || null;
+
+    let title = tocTitle || `Section ${i + 1}`;
+
+    // Upgrade from HTML TOC if it has more info (e.g. "One The Wrong Door" vs "One")
+    if (htmlTocTitle && htmlTocTitle.length > title.length + 2) {
+      title = htmlTocTitle;
+    }
+    // Upgrade from chapter heading if it adds new information
+    if (heading && heading.length > title.length + 2) {
+      const titleLower = title.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const headLower = heading.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (headLower.includes(titleLower)) {
+        title = heading; // heading is a superset (e.g. "Chapter One: The Wrong Door"), use it
+      } else if (!titleLower.includes(headLower)) {
+        title = `${title} — ${heading}`; // genuinely different info, combine both
+      }
+      // If title already includes the heading text, keep title as-is
+    }
+
     return {
       index: i,
-      title: tocMatch?.title || `Section ${i + 1}`,
+      title,
       text: ch.text,
       href: ch.href,
     };
