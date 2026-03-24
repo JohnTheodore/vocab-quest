@@ -1,7 +1,7 @@
 # Spaced Repetition Data Model — Design Spec
 
 **Project:** Vocabulary Quest
-**Status:** Proposed
+**Status:** Implemented
 **Scope:** Data model and engine design for tracking vocabulary game results and scheduling word reviews across multiple game types.
 
 ---
@@ -11,7 +11,7 @@
 1. Record which words a learner has encountered and how well they performed.
 2. Use that history to schedule future reviews using a spaced repetition algorithm.
 3. Support multiple vocabulary game types (current and future) feeding into a single shared model.
-4. Persist data across sessions in the browser using the existing local storage abstraction.
+4. Persist data on the server via the key-value store API (`/api/kv/:key`), backed by JSON files in the `data/` directory.
 
 ---
 
@@ -51,7 +51,7 @@ One record per unique word, ever seen across all games and books. This is the pr
 }
 ```
 
-**Storage key:** `word-record-{normalizedWord}` (e.g. `word-record-languidly`)
+All word records are stored together in a single blob under the `vocab-quest-data` key (see Storage section below).
 
 ---
 
@@ -86,8 +86,7 @@ One record per completed game. This is an append-only log — existing sessions 
 }
 ```
 
-**Storage key:** `session-{id}` (one key per session)
-**Index key:** `session-index` — an array of session IDs in chronological order, used to enumerate all sessions without loading them all.
+All sessions are stored together in the same `vocab-quest-data` blob alongside word records (see Storage section below).
 
 ---
 
@@ -183,37 +182,43 @@ No other changes are required.
 
 ---
 
-## Proposed JavaScript API
+## JavaScript API
 
-A single module (`src/wordRecords.js`) wraps the storage layer and exposes:
+The module `src/wordRecords.js` wraps the storage layer and exports:
 
 ```js
 // Called at the end of any game to persist results and update SR state.
 // `session` is a GameSession object (without the id, which is generated internally).
-async function recordSession(session): Promise<void>
+// Returns the full session object with generated id and timestamp.
+export async function recordSession(session): Promise<GameSession>
 
 // Returns all words due for review today, sorted by urgency (most overdue first).
-async function getReviewQueue(): Promise<WordRecord[]>
+export async function getReviewQueue(): Promise<WordRecord[]>
 
 // Returns the full history for a single word, or null if never seen.
-async function getWordRecord(word): Promise<WordRecord | null>
+export async function getWordRecord(word): Promise<WordRecord | null>
 
 // Returns all sessions, optionally filtered by gameType.
-async function getSessions(options?: { gameType?: string }): Promise<GameSession[]>
+export async function getSessions(options?: { gameType?: string }): Promise<GameSession[]>
+
+// Downloads the full data blob as a JSON file (manual backup).
+export async function exportData(filename?: string): Promise<void>
 ```
 
 ---
 
-## Storage Key Summary
+## Storage
 
-| Key pattern | Contents |
-|---|---|
-| `word-record-{word}` | `WordRecord` for a single word |
-| `session-{id}` | `GameSession` record |
-| `session-index` | Array of all session IDs (chronological) |
-| `review-queue-cache` | Optional precomputed review queue (disposable) |
+All spaced repetition data is stored as a single JSON blob under the key `vocab-quest-data`, with the structure:
 
-All keys are managed through the existing `storageGet` / `storageSet` abstraction, which supports both `localStorage` (browser) and the `window.storage` API (Claude artifact environment).
+```jsonc
+{
+  "wordRecords": { "languidly": { /* WordRecord */ }, ... },
+  "sessions": [ { /* GameSession */ }, ... ]
+}
+```
+
+This key is managed through the server-side key-value store (`/api/kv/vocab-quest-data`), which persists it as a JSON file in the `data/` directory. The client-side `storageGet`/`storageSet` helpers in `src/App.jsx` call the KV API via `window.storage`, which is wired to the server endpoints at app startup.
 
 ---
 
@@ -222,5 +227,3 @@ All keys are managed through the existing `storageGet` / `storageSet` abstractio
 1. **Deduplication across books.** If "languidly" appears in two different books, should it be one `WordRecord` or two? This spec treats it as one (normalized word is the key), with multiple entries in `sources[]`. This is the right call for SR purposes — knowledge of a word transfers across books.
 
 2. **Review game UX.** The review queue is data; the UI for reviewing words is not specified here. A dedicated "Review" game mode could consume the queue and feed back into the same `GameSession` / `WordRecord` model using `gameType: "review"`.
-
-3. **Export / sync.** All data is currently local to the browser. A future export-to-JSON feature would allow backup and transfer between devices without requiring a backend.

@@ -8,26 +8,20 @@
 const STORAGE_KEY = "vocab-quest-data";
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
+//
+// These previously had a localStorage fallback, but now window.storage is always
+// set by App.jsx to the server-backed KV store (see the comment there for why).
 
 async function loadData() {
   try {
-    if (window.storage) {
-      const result = await window.storage.get(STORAGE_KEY);
-      return result ? JSON.parse(result.value) : { wordRecords: {}, sessions: [] };
-    } else {
-      const val = localStorage.getItem(STORAGE_KEY);
-      return val ? JSON.parse(val) : { wordRecords: {}, sessions: [] };
-    }
+    const result = await window.storage.get(STORAGE_KEY);
+    return result ? JSON.parse(result.value) : { wordRecords: {}, sessions: [] };
   } catch { return { wordRecords: {}, sessions: [] }; }
 }
 
 async function saveData(data) {
   try {
-    if (window.storage) {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(data));
-    } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    }
+    await window.storage.set(STORAGE_KEY, JSON.stringify(data));
   } catch (e) { console.warn("wordRecords: storage write failed:", e); }
 }
 

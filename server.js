@@ -11,8 +11,9 @@
  */
 
 import express from 'express';
-import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
+import { resolve, join } from 'path';
+import { unlink } from 'fs/promises';
 import { createHmac } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -226,6 +227,70 @@ app.post('/api/gemini/:model', async (req, res) => {
     console.error('Gemini API network error:', err);
     res.status(500).json({ error: { message: err.message || 'Server error' } });
   }
+});
+
+// ── /api/kv/:key — generic key-value store backed by data/ directory ─────────
+//
+// All app data (books, progress, illustrations, story bibles, word caches) was
+// originally stored in the browser via localStorage. This meant data was lost
+// when switching browsers or clearing storage, and couldn't survive Railway
+// redeploys. Rather than building dedicated endpoints per resource type, we
+// added a generic KV store — the client already had a storageGet/storageSet
+// abstraction with a window.storage pluggable backend, so wiring that to these
+// endpoints moved everything server-side with minimal client changes.
+//
+// Each key becomes a JSON file in DATA_DIR. Writes use atomic rename (write to
+// .tmp, then fs.rename) so a crash mid-write can't corrupt a file. Keys are
+// sanitized to prevent path traversal.
+//
+// In Codespaces, ./data/ persists inside /workspaces/ across stops/starts.
+// On Railway, DATA_DIR should point to a mounted volume (e.g. /data).
+const DATA_DIR = resolve(process.cwd(), process.env.DATA_DIR || 'data');
+mkdirSync(DATA_DIR, { recursive: true });
+
+function sanitizeKey(key) {
+  return key.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+app.get('/api/kv/:key', (req, res) => {
+  const file = join(DATA_DIR, `${sanitizeKey(req.params.key)}.json`);
+  if (!existsSync(file)) return res.json(null);
+  try {
+    const raw = readFileSync(file, 'utf8');
+    res.json({ value: raw });
+  } catch (err) {
+    console.error('KV read error:', err);
+    res.status(500).json({ error: { message: 'Read failed' } });
+  }
+});
+
+app.put('/api/kv/:key', (req, res) => {
+  const key = sanitizeKey(req.params.key);
+  const file = join(DATA_DIR, `${key}.json`);
+  const tmp = join(DATA_DIR, `${key}.tmp`);
+  const { value } = req.body;
+  if (value === undefined) return res.status(400).json({ error: { message: 'Missing "value" in body' } });
+  try {
+    writeFileSync(tmp, value, 'utf8');
+    renameSync(tmp, file);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('KV write error:', err);
+    res.status(500).json({ error: { message: 'Write failed' } });
+  }
+});
+
+app.delete('/api/kv/:key', async (req, res) => {
+  const file = join(DATA_DIR, `${sanitizeKey(req.params.key)}.json`);
+  try {
+    await unlink(file);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.error('KV delete error:', err);
+      return res.status(500).json({ error: { message: 'Delete failed' } });
+    }
+  }
+  res.json({ ok: true });
 });
 
 // Health check

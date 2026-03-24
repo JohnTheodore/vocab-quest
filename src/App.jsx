@@ -274,26 +274,42 @@ async function hashText(text) {
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }
 
-// ── Persistent storage helpers ────────────────────────────────────────────────
+// ── Persistent storage — backed by server KV store ──────────────────────────
+//
+// Previously, all data (books, progress, illustrations, caches) lived in
+// localStorage, which is browser-local and easily lost. The storageGet/storageSet
+// helpers below already checked for a window.storage pluggable backend before
+// falling back to localStorage. By setting window.storage here to an object that
+// calls the server's /api/kv endpoints, all existing call sites (both here and
+// in wordRecords.js) automatically persist to the server with no further changes.
+window.storage = {
+  async get(key) {
+    const res = await fetch(`/api/kv/${encodeURIComponent(key)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  },
+  async set(key, value) {
+    await fetch(`/api/kv/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+  },
+  async delete(key) {
+    await fetch(`/api/kv/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  },
+};
+
 async function storageGet(key) {
   try {
-    if (window.storage) {
-      const result = await window.storage.get(key);
-      return result ? JSON.parse(result.value) : null;
-    } else {
-      const val = localStorage.getItem(key);
-      return val ? JSON.parse(val) : null;
-    }
+    const result = await window.storage.get(key);
+    return result ? JSON.parse(result.value) : null;
   } catch { return null; }
 }
 
 async function storageSet(key, value) {
   try {
-    if (window.storage) {
-      await window.storage.set(key, JSON.stringify(value));
-    } else {
-      localStorage.setItem(key, JSON.stringify(value));
-    }
+    await window.storage.set(key, JSON.stringify(value));
   } catch (e) { console.warn("Storage write failed:", e); }
 }
 
@@ -327,10 +343,7 @@ async function deleteBookFromLibrary(hash) {
   }
   await flushStoryBible(hash);
   // Remove book data and index entry
-  try {
-    if (window.storage) await window.storage.delete?.(`vocab-book-${hash}`);
-    localStorage.removeItem(`vocab-book-${hash}`);
-  } catch {}
+  try { await window.storage.delete(`vocab-book-${hash}`); } catch {}
   const index = await getBookIndex();
   await storageSet(BOOK_INDEX_KEY, index.filter(b => b.hash !== hash));
 }
@@ -338,19 +351,12 @@ async function deleteBookFromLibrary(hash) {
 async function flushWordCaches(bookData) {
   for (const ch of bookData.chapters || []) {
     const chapterHash = await hashText(ch.text);
-    const key = `wordlist-${chapterHash}`;
-    try {
-      if (window.storage) await window.storage.delete?.(key);
-      localStorage.removeItem(key);
-    } catch {}
+    try { await window.storage.delete(`wordlist-${chapterHash}`); } catch {}
   }
 }
 
 async function flushStoryBible(bookHash) {
-  try {
-    if (window.storage) await window.storage.delete?.(`storybible-${bookHash}`);
-    localStorage.removeItem(`storybible-${bookHash}`);
-  } catch {}
+  try { await window.storage.delete(`storybible-${bookHash}`); } catch {}
 }
 
 async function flushIllustrationCaches(bookData) {
@@ -359,16 +365,9 @@ async function flushIllustrationCaches(bookData) {
     const indexKey = `illust-index-${chapterHash}`;
     const words = (await storageGet(indexKey)) || [];
     for (const w of words) {
-      const key = `illust-${chapterHash}-${w}`;
-      try {
-        if (window.storage) await window.storage.delete?.(key);
-        localStorage.removeItem(key);
-      } catch {}
+      try { await window.storage.delete(`illust-${chapterHash}-${w}`); } catch {}
     }
-    try {
-      if (window.storage) await window.storage.delete?.(indexKey);
-      localStorage.removeItem(indexKey);
-    } catch {}
+    try { await window.storage.delete(indexKey); } catch {}
   }
 }
 
@@ -1210,8 +1209,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
   async function handleRefresh() {
     const chapterHash = await hashText(chapter.text);
     const cacheKey = `wordlist-${chapterHash}`;
-    try { await window.storage?.delete?.(cacheKey); } catch {}
-    try { localStorage.removeItem(cacheKey); } catch {}
+    try { await window.storage.delete(cacheKey); } catch {}
     setLoading(true);
     setAllWords([]);
     setSelectedWords([]);

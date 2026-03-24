@@ -64,6 +64,7 @@ npm run dev
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) → API Keys | Image generation |
 | `AUTH_PASSWORD` | You choose it | Password-protecting the app (production) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude login` output or CI secrets | Claude API in environments without `claude login` (e.g. Railway) |
+| `DATA_DIR` | You choose it | Override the data storage directory (defaults to `./data/`) |
 
 Copy `.env.example` to `.env` and fill in the values. The `.env` file is gitignored and will never be committed.
 
@@ -91,8 +92,10 @@ The app is configured for [Railway](https://railway.app) out of the box via `rai
    | `GEMINI_API_KEY` | Your Google AI Studio key |
    | `AUTH_PASSWORD` | A password to protect the app |
    | `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token from `~/.claude/.credentials.json` (the `accessToken` field) |
+   | `DATA_DIR` | `/data` (mount path for your Railway volume) |
 
-3. Deploy — Railway runs `npm run build` then `node server.js` automatically
+3. Create a **volume** in the Railway dashboard and mount it to `/data`. This is where all persistent data (progress, books, illustrations, caches) is stored. Without a volume, data is lost on every redeploy.
+4. Deploy — Railway runs `npm run build` then `node server.js` automatically
 
 The server binds to `process.env.PORT` (injected by Railway at runtime) and serves the Vite-built frontend from `dist/`.
 
@@ -100,7 +103,7 @@ The server binds to `process.env.PORT` (injected by Railway at runtime) and serv
 
 ### 6. How does it work?
 
-The app is a React frontend (`src/App.jsx`) backed by an Express API server (`server.js`) that proxies calls to Claude and Gemini. It progresses through eight sequential phases:
+The app is a React frontend (`src/App.jsx`) backed by an Express API server (`server.js`) that proxies calls to Claude and Gemini and persists all data to disk. It progresses through eight sequential phases:
 
 **Upload → Story Bible → Chapter Select → Word Suggestion → Asset Generation → Game → Results**
 
@@ -108,7 +111,7 @@ The app is a React frontend (`src/App.jsx`) backed by an Express API server (`se
 - **Story Bible** — Claude reads up to 60,000 characters of the book and extracts character appearances and setting descriptions. Cached by SHA-256 hash of the book text — generated once, loaded instantly on return visits
 - **Word suggestion** — Claude identifies up to 20 SAT-level words per chapter that appear verbatim in the text, with character position verified client-side. Also cached per chapter
 - **Quiz generation** — A single Claude call generates all quiz options and hints for the selected words at once
-- **Image generation** — Prompts are built from the original passage + matching Story Bible character/setting descriptions + book-wide style constants, ensuring visual consistency. Images are generated via the Gemini API and cached in the browser
+- **Image generation** — Prompts are built from the original passage + matching Story Bible character/setting descriptions + book-wide style constants, ensuring visual consistency. Images are generated via the Gemini API and cached on the server
 - **Two-round game** — Round 1: word → meaning (keep trying with hints until correct). Round 2: fill in the blank (definition given, choose the correct word)
 - **Results** — Separate scores for each round, showing first-try vs. with-a-hint performance
 
@@ -116,9 +119,28 @@ The app is a React frontend (`src/App.jsx`) backed by an Express API server (`se
 
 ---
 
-### 7. Progress tracking & spaced repetition
+### 7. Data persistence
 
-The app tracks every word you encounter and uses the **SM-2 algorithm** (the same algorithm behind Anki) to schedule future reviews. All data lives in browser storage and can be exported as a JSON file.
+All application data — uploaded books, progress, generated illustrations, story bibles, word caches — is stored server-side via a generic key-value store (`/api/kv/:key`). Each key is saved as a separate JSON file in the `data/` directory (configurable via `DATA_DIR`). Writes use atomic rename (write to `.tmp`, then `fs.rename`) so a crash mid-write can't corrupt a file.
+
+| Data | KV key pattern | Regenerable? |
+|------|---------------|--------------|
+| Book library index | `vocab-books-index` | No |
+| Parsed EPUB content | `vocab-book-{hash}` | Yes (re-upload the EPUB) |
+| SM-2 progress & sessions | `vocab-quest-data` | No |
+| Story bible | `storybible-{hash}` | Yes (costs a Claude call) |
+| Word lists per chapter | `wordlist-{chapterHash}` | Yes (costs a Claude call) |
+| Illustrations | `illust-{chapterHash}-{word}` | Yes (costs a Gemini call) |
+
+**Codespaces:** `./data/` lives inside `/workspaces/` which already persists across Codespace stops and starts. No extra setup needed.
+
+**Railway:** Create a volume in the Railway dashboard, mount it (e.g. to `/data`), and set `DATA_DIR=/data`. See the deployment section above.
+
+---
+
+### 8. Progress tracking & spaced repetition
+
+The app tracks every word you encounter and uses the **SM-2 algorithm** (the same algorithm behind Anki) to schedule future reviews. Progress data is persisted on the server and can also be exported as a JSON file.
 
 #### How it works
 
