@@ -866,11 +866,16 @@ const STYLES = `
   .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
   .opt-btn.eliminated { opacity: 0.28; cursor: not-allowed; background: rgba(255,255,255,0.01); border-color: rgba(180,130,50,0.08); color: rgba(200,180,140,0.4); text-decoration: line-through; text-decoration-color: rgba(200,180,140,0.2); }
   .opt-btn.blank-opt { font-family: "Playfair Display", serif; font-style: italic; font-size: 14.5px; }
-  .options-grid.blank-options { grid-template-columns: 1fr; max-width: 360px; }
+  .options-grid.blank-options { grid-template-columns: 1fr; }
+  .blank-row { display: flex; gap: 24px; align-items: flex-start; }
+  .blank-row .options-grid.blank-options { flex: 1 1 55%; min-width: 0; }
+  .blank-feedback { flex: 1 1 45%; min-width: 0; display: flex; align-items: center; }
   .blank-word { display: inline-block; background: rgba(180,130,50,0.12); border-bottom: 2px solid rgba(180,130,50,0.5); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
   .opt-btn:disabled:not(.correct):not(.wrong) { opacity: 0.5; cursor: default; }
   .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(180,130,50,0.45); margin-bottom: 3px; font-style: normal; }
-  .feedback-banner { margin-top: 16px; padding: 13px 16px; border-radius: 3px; font-size: 13.5px; line-height: 1.55; animation: fadeUp 0.3s ease; }
+  .feedback-slot { min-height: 120px; margin-top: 16px; }
+  .blank-feedback .feedback-banner { margin-top: 0; }
+  .feedback-banner { padding: 13px 16px; border-radius: 3px; font-size: 13.5px; line-height: 1.55; animation: fadeUp 0.3s ease; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
   .feedback-banner.hint { background: rgba(180,130,30,0.1); border: 1px solid rgba(180,130,30,0.28); color: #d4b86a; }
   .feedback-banner.correct { background: var(--correct); border: 1px solid var(--correct-border); color: var(--correct-text); }
@@ -1791,7 +1796,7 @@ function BlankCard({ asset, onCorrect }) {
           "
         </div>
       </div>
-      <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
+      <div className="card-section blank-row" style={{borderBottom:"none",paddingBottom:28}}>
         <div className="options-grid blank-options">
           {blankOptions.map((opt, i) => {
             let cls = "opt-btn blank-opt";
@@ -1806,6 +1811,7 @@ function BlankCard({ asset, onCorrect }) {
             );
           })}
         </div>
+        <div className="blank-feedback">
         {phase === "hint" && (
           <div className="feedback-banner hint">
             <div className="fb-head">Not quite — try again.</div>
@@ -1818,6 +1824,7 @@ function BlankCard({ asset, onCorrect }) {
             The word is <strong>{asset.word}</strong> — moving on…
           </div>
         )}
+        </div>
       </div>
     </div>
   );
@@ -1955,6 +1962,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
             </>
             )}
 
+            <div className="feedback-slot">
             {phase === "hint" && (
               <div className="feedback-banner hint">
                 <div className="fb-head">Not quite — try again.</div>
@@ -1973,6 +1981,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
                 </button>
               </>
             )}
+            </div>
           </div>
           </div>
         </div>
