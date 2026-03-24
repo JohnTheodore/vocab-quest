@@ -253,6 +253,10 @@ function sanitizeKey(key) {
 }
 
 app.get('/api/kv/:key', (req, res) => {
+  // Prevent browser from caching KV responses — the value can change between
+  // requests (e.g., a GET returning null, then a PUT writes data, then another
+  // GET should return the new data, not a cached null).
+  res.set('Cache-Control', 'no-store');
   const file = join(DATA_DIR, `${sanitizeKey(req.params.key)}.json`);
   if (!existsSync(file)) return res.json(null);
   try {

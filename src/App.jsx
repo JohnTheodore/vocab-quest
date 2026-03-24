@@ -1591,35 +1591,47 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, 
           if (!chHash || !dataUri) return;
           const w = word.toLowerCase().trim();
           await storageSet(`illust-${chHash}-${w}`, { dataUri, model: geminiModel, generatedAt: new Date().toISOString() });
-          // Maintain index for flush
+        }
+
+        // Write the illust-index once after all images are cached, not during
+        // each parallel cacheImage call (which caused a race condition where
+        // concurrent read-modify-write cycles lost most entries).
+        async function updateIllustIndex(words) {
+          if (!chHash) return;
           const indexKey = `illust-index-${chHash}`;
-          const idx = (await storageGet(indexKey)) || [];
-          if (!idx.includes(w)) { idx.push(w); await storageSet(indexKey, idx); }
+          const existing = (await storageGet(indexKey)) || [];
+          const merged = [...new Set([...existing, ...words.map(w => w.toLowerCase().trim())])];
+          await storageSet(indexKey, merged);
         }
 
         const geminiAvailable = await checkGeminiAvailable();
         if (geminiAvailable) {
           // ── Live: generate images via Gemini proxy ───────────────────────────
           setImgStatus("generating");
+          const newlyCached = [];
           const withImages = await Promise.all(
             assetsWithPrompts.map(async a => {
               const cached = await getCachedImage(a.word);
               if (cached) return { ...a, image: cached };
               const img = await generateGeminiImageDirect(a.imagePrompt, geminiModel);
               await cacheImage(a.word, img);
+              newlyCached.push(a.word);
               return { ...a, image: img };
             })
           );
+          if (newlyCached.length) await updateIllustIndex(newlyCached);
           setImgStatus("done");
           onReady(withImages);
 
         } else if (tarballImages && Object.keys(tarballImages).length > 0) {
           // ── Artifact: use pre-uploaded tarball ──────────────────────────────
+          const tarballCached = [];
           const withImages = await Promise.all(assetsWithPrompts.map(async a => {
             const img = tarballImages[a.word] || null;
-            if (img) await cacheImage(a.word, img);
+            if (img) { await cacheImage(a.word, img); tarballCached.push(a.word); }
             return { ...a, image: img };
           }));
+          if (tarballCached.length) await updateIllustIndex(tarballCached);
           console.log(`Applied ${withImages.filter(a => a.image).length} tarball images`);
           setImgStatus("done");
           onReady(withImages);
