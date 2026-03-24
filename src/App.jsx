@@ -820,17 +820,16 @@ const STYLES = `
   .gen-item.done .gen-word { color: var(--correct-text); }
   .gen-item.active .gen-word { color: var(--gold); }
 
-  /* Game */
+  /* Game – quiz card with illustration + question content */
   @keyframes imgFade { from{opacity:0} to{opacity:1} }
-  .illustration-area { width: 100%; background: #0a0704; overflow: hidden; }
-  /* max-height + object-fit:contain keeps the full image visible without cropping,
-     capped at 28vh so the rest of the question card fits on screen without scrolling */
+  /* No background color — the card gradient shows through around contain-fitted images
+     instead of harsh black bars */
+  .illustration-area { width: 100%; overflow: hidden; }
   .illustration-area img { width: 100%; height: auto; max-height: 28vh; object-fit: contain; display: block; animation: imgFade 0.8s ease; }
-  @keyframes imgFade { from{opacity:0} to{opacity:1} }
   .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(180,130,50,0.1); display: flex; align-items: baseline; gap: 14px; }
   .vocab-word { font-family: 'Playfair Display', serif; font-size: 34px; font-weight: 700; color: var(--gold); }
   .word-pos { font-size: 12px; font-style: italic; color: rgba(184,144,42,0.55); }
-  .paragraph-text { font-size: 15px; line-height: 1.78; color: var(--text-dim); font-style: italic; }
+  .paragraph-text { font-size: 15px; line-height: 1.6; color: var(--text-dim); font-style: italic; }
   .paragraph-text mark { background: rgba(212,168,67,0.17); color: #e8c96a; border-radius: 2px; padding: 1px 3px; font-style: italic; }
   .question-text { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 16px; }
   .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -939,15 +938,16 @@ const STYLES = `
     .app-title h1 { font-size: 32px; }
   }
 
-  /* .game-active is added to .app only during the question phase (see App render below).
-     All rules here are scoped to game-active so they don't affect any other page.
-     The card is made a flex column filling the full viewport height so the illustration
-     can grow to fill all remaining space above the fixed-height question content. */
-  .app.game-active { padding-top: 14px; padding-bottom: 14px; height: 100dvh; box-sizing: border-box; justify-content: flex-start; }
-  .app.game-active > .card { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-  .app.game-active .illustration-area { flex: 1; min-height: 0; display: flex; align-items: center; }
+  /* .game-active is added to .app only during the question phase.
+     The card uses a 2-row equal grid so the illustration and question content
+     are the same height and vertically centered in the viewport.
+     Portrait: image on top, content below (grid rows).
+     Landscape: image on left, content on right (grid columns). */
+  .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: center; }
+  .app.game-active > .card { display: grid; grid-template-rows: 1fr 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
+  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 5%; }
   .app.game-active .illustration-area img { width: 100%; height: 100%; max-height: none; object-fit: contain; }
-  .app.game-active .game-content { display: contents; }
+  .app.game-active .game-content { min-height: 0; overflow-y: auto; }
   .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
   .app.game-active .card-section:last-child { padding-bottom: 20px; }
   .app.game-active .word-banner { padding-top: 12px; padding-bottom: 10px; }
@@ -961,13 +961,10 @@ const STYLES = `
     .app.game-active .question-text { font-size: 16px; }
     .app.game-active .paragraph-text { font-size: 14px; }
   }
-
-  /* Landscape: image on the left, question content on the right */
   @media (orientation: landscape) {
-    .app.game-active > .card:has(.illustration-area) { flex-direction: row; }
-    .app.game-active .illustration-area { flex: 0 0 45%; max-width: 45%; height: 100%; }
+    .app.game-active > .card:has(.illustration-area) { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
     .app.game-active .illustration-area img { height: 100%; width: 100%; }
-    .app.game-active .game-content { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
+    .app.game-active .game-content { display: flex; flex-direction: column; }
   }
 `;
 
@@ -1900,14 +1897,13 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
               <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
             </div>
           )}
+          {/* Word + paragraph merged into one section (no separate banner / "From the text" label)
+              to keep the content half compact and balanced against the illustration */}
           <div className="game-content">
-          <div className="word-banner">
-            <span className="vocab-word">{current.word}</span>
-          </div>
           {phase !== "correct" && (
           <div className="card-section">
-            <div className="section-label">From the text</div>
-            <div className="paragraph-text">
+            <span className="vocab-word">{current.word}</span>
+            <div className="paragraph-text" style={{marginTop:10}}>
               "<Highlighted paragraph={current.paragraph} word={current.word}/>"
             </div>
           </div>
