@@ -602,14 +602,28 @@ function shuffleOptions({ correct, options }) {
   return { correct: idx, options: newOptions };
 }
 
-async function generateAllWordAssets(words, bookTitle, bible = null) {
-  // Build a single prompt covering all words at once
-  const wordList = words.map((w, i) =>
-    `${i + 1}. Word: "${w.word}"\n   Passage: "${w.paragraph.slice(0, 300)}"`
-  ).join("\n\n");
+async function generateAllWordAssets(words, bookTitle, chapterText, bible = null) {
+  // Cache quiz data (definitions, hints) so replaying the same words skips the
+  // Claude call. The cache key is based on chapter + sorted word list, so choosing
+  // different words from the same chapter produces a different key. Option order
+  // is re-shuffled on every play so the game doesn't feel identical.
+  const chHash = chapterText ? await hashText(chapterText) : null;
+  const wordKey = words.map(w => w.word.toLowerCase()).sort().join(",");
+  const cacheKey = chHash ? `quiz-${chHash}-${await hashText(wordKey)}` : null;
 
-  const result = await claudeJSON(
-    `You are preparing a vocabulary game for middle-grade readers (ages 10-14) of "${bookTitle}".
+  let arr;
+  const cached = cacheKey ? await storageGet(cacheKey) : null;
+
+  if (cached) {
+    arr = cached;
+  } else {
+    // Build a single prompt covering all words at once
+    const wordList = words.map((w, i) =>
+      `${i + 1}. Word: "${w.word}"\n   Passage: "${w.paragraph.slice(0, 300)}"`
+    ).join("\n\n");
+
+    const result = await claudeJSON(
+      `You are preparing a vocabulary game for middle-grade readers (ages 10-14) of "${bookTitle}".
 
 For each word below, generate:
 - 4 multiple choice options (correct definition first at index 0, then 3 plausible wrong distractors)
@@ -626,12 +640,15 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
     "hint": "Look at how Sara is moving — does she seem full of energy, or like even lifting her arms takes effort?"
   }
 ]`,
-    "You are a vocabulary education expert. Respond with a valid JSON array only — no markdown, no explanation.",
-    Math.min(16000, words.length * 700 + 1000)
-  );
+      "You are a vocabulary education expert. Respond with a valid JSON array only — no markdown, no explanation.",
+      Math.min(16000, words.length * 700 + 1000)
+    );
 
-  // result may be an array directly or wrapped in an object
-  const arr = Array.isArray(result) ? result : (result.words || result.items || Object.values(result));
+    // result may be an array directly or wrapped in an object
+    arr = Array.isArray(result) ? result : (result.words || result.items || Object.values(result));
+
+    if (cacheKey) await storageSet(cacheKey, arr);
+  }
 
   return arr.map((item, i) => {
     const w = words[i];
@@ -1550,7 +1567,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, 
   useEffect(() => {
     (async () => {
       try {
-        const assets = await generateAllWordAssets(words, bookTitle, bible);
+        const assets = await generateAllWordAssets(words, bookTitle, chapterText, bible);
         const assetsWithPrompts = assets.map(a => ({
           ...a,
           imagePrompt: buildImagePrompt(a.paragraph, bible),
