@@ -113,3 +113,60 @@ The app is a React frontend (`src/App.jsx`) backed by an Express API server (`se
 - **Results** — Separate scores for each round, showing first-try vs. with-a-hint performance
 
 **Tech stack:** React 18, Vite, Express, Claude Agent SDK, Google Gemini image API, JSZip, pako
+
+---
+
+### 7. Progress tracking & spaced repetition
+
+The app tracks every word you encounter and uses the **SM-2 algorithm** (the same algorithm behind Anki) to schedule future reviews. All data lives in browser storage and can be exported as a JSON file.
+
+#### How it works
+
+After each game, the app records a session and updates a per-word record with SM-2 spaced repetition state. The quality score is derived from your performance:
+
+| Result | SM-2 quality | Effect |
+|--------|-------------|--------|
+| Correct on first try | 5 (perfect recall) | Interval grows, next review pushed further out |
+| Correct after hints | 3 (recalled with difficulty) | Interval grows more slowly |
+| Never answered correctly | 1 (blackout) | Interval resets to 1 day |
+
+When a word appears in both rounds (meaning + fill-in-the-blank), the **minimum** score across both is used — the word is only considered well-learned if both tasks were nailed on the first try.
+
+#### Exporting your progress
+
+Click **Download Progress** on the results screen to save `vocab-quest-progress.json`. The file contains:
+
+```jsonc
+{
+  "wordRecords": {
+    "languidly": {
+      "word": "languidly",
+      "firstSeenAt": "2026-03-21T10:00:00Z",
+      "sources": [                          // every book/chapter where this word appeared
+        { "bookTitle": "A Little Princess", "bookHash": "abc123", "chapterTitle": "Chapter 5" }
+      ],
+      "easeFactor": 2.5,                    // SM-2 difficulty multiplier (starts at 2.5)
+      "interval": 6,                        // days until next review
+      "repetitions": 2,                     // consecutive successful reviews
+      "nextReviewDate": "2026-03-27",       // when this word is due for review
+      "lastReviewedAt": "2026-03-21T10:30:00Z"
+    }
+    // ... one entry per word you've ever studied
+  },
+  "sessions": [
+    {
+      "id": "sess_1711018200000_a1b2c",
+      "gameType": "vocab-quest",
+      "completedAt": "2026-03-21T10:30:00Z",
+      "context": { "bookTitle": "A Little Princess", "bookHash": "abc123", "chapterTitle": "Chapter 5" },
+      "wordResults": [
+        { "word": "languidly", "taskType": "meaning",    "firstTry": true,  "attempts": 1 },
+        { "word": "languidly", "taskType": "fill-blank", "firstTry": false, "attempts": 2 }
+      ]
+    }
+    // ... one entry per completed game
+  ]
+}
+```
+
+See [`docs/spaced-repetition-design.md`](docs/spaced-repetition-design.md) for the full data model and algorithm specification.
