@@ -174,10 +174,19 @@ async function parseEpub(file) {
         if (!base || !spineBasenames.has(base)) return;
         const block = a.closest("li") || a.closest("div") || a.closest("td") || a.parentElement;
         if (!block) return;
+        // Get the link text (e.g. "One") and the full block text (e.g. "One The Wrong Door").
+        // If the block has extra text beyond the link, insert " - " as separator
+        // so titles read "One - The Wrong Door" instead of "One The Wrong Door".
+        const linkText = a.textContent.replace(/\s+/g, " ").trim();
         const fullText = block.textContent.replace(/\s+/g, " ").trim();
+        let title = fullText;
+        if (linkText && fullText.startsWith(linkText) && fullText.length > linkText.length) {
+          const rest = fullText.slice(linkText.length).trim();
+          if (rest) title = `${linkText} - ${rest}`;
+        }
         // Cap at 120 chars to reject cases where a wrapper div grabbed multiple entries
-        if (fullText.length > 0 && fullText.length < 120) {
-          htmlTocTitles[base] = fullText;
+        if (title.length > 0 && title.length < 120) {
+          htmlTocTitles[base] = title;
         }
       });
       if (Object.keys(htmlTocTitles).length > 0) break; // Use first TOC page found
