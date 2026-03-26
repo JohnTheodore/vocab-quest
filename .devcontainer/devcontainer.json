@@ -1,6 +1,7 @@
 {
   "name": "Vocabulary Quest",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:18",
+  // Node 22 LTS — required by Vite 6 and matches engines.node in package.json
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
   "features": {
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.12"
