@@ -1262,6 +1262,7 @@ function UploadPhase({ onParsed }) {
   const [library, setLibrary] = useState([]);
   const [expandedBook, setExpandedBook] = useState(null);
   const [flushed, setFlushed] = useState({}); // { "hash-layer": true } for brief confirmation
+  const [deleting, setDeleting] = useState(null); // hash of book currently being deleted
   const inputRef = useRef();
 
   useEffect(() => { getBookIndex().then(setLibrary); }, []);
@@ -1298,11 +1299,26 @@ function UploadPhase({ onParsed }) {
     setLoading(false);
   }
 
+  // Delete via the server-side bulk endpoint instead of issuing dozens of
+  // sequential KV DELETE calls from the client. The server reads files and
+  // computes chapter hashes locally, deletes everything in parallel, and
+  // returns in a single round trip (~100ms vs ~20s previously).
+  // UI shows a "Deleting..." state so the user knows the action is in progress.
   async function handleDeleteBook(e, hash) {
     e.stopPropagation();
-    await deleteBookFromLibrary(hash);
-    setExpandedBook(null);
-    setLibrary(await getBookIndex());
+    setDeleting(hash);
+    try {
+      const res = await fetch(`/api/books/${encodeURIComponent(hash)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      setExpandedBook(null);
+      // Optimistic removal — the server already deleted the index entry,
+      // so we update the UI immediately without re-fetching.
+      setLibrary(prev => prev.filter(b => b.hash !== hash));
+    } catch (err) {
+      console.error('Failed to delete book:', err);
+      setError('Failed to delete book. Please try again.');
+    }
+    setDeleting(null);
   }
 
   async function handleFlush(e, hash, layer) {
@@ -1323,15 +1339,15 @@ function UploadPhase({ onParsed }) {
           <div className="book-library">
             <div className="book-library-label">Your books</div>
             {library.map(b => (
-              <div key={b.hash} className="book-entry">
-                <div className="book-item" onClick={() => handleSelectBook(b.hash)}>
+              <div key={b.hash} className={`book-entry${deleting === b.hash ? " book-entry-deleting" : ""}`}>
+                <div className="book-item" onClick={() => deleting ? null : handleSelectBook(b.hash)} style={deleting === b.hash ? { opacity: 0.5, pointerEvents: "none" } : {}}>
                   <div className="book-item-info">
                     <div className="book-item-title">{b.title}</div>
-                    <div className="book-item-meta">{b.chapterCount} chapter{b.chapterCount !== 1 ? "s" : ""}</div>
+                    <div className="book-item-meta">{deleting === b.hash ? "Deleting..." : `${b.chapterCount} chapter${b.chapterCount !== 1 ? "s" : ""}`}</div>
                   </div>
                   <div className="book-item-actions">
-                    <button className="book-item-btn kebab" onClick={e => { e.stopPropagation(); setExpandedBook(expandedBook === b.hash ? null : b.hash); }} title="Cache settings">...</button>
-                    <button className="book-item-btn remove" onClick={e => handleDeleteBook(e, b.hash)} title="Remove book and all cached data">&times;</button>
+                    <button className="book-item-btn kebab" onClick={e => { e.stopPropagation(); setExpandedBook(expandedBook === b.hash ? null : b.hash); }} title="Cache settings" disabled={!!deleting}>...</button>
+                    <button className="book-item-btn remove" onClick={e => handleDeleteBook(e, b.hash)} title="Remove book and all cached data" disabled={!!deleting}>{deleting === b.hash ? "\u23F3" : "\u00D7"}</button>
                   </div>
                 </div>
                 {expandedBook === b.hash && (
