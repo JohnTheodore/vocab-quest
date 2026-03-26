@@ -5,6 +5,7 @@
  *   credentials from `claude login` (~/.claude/.credentials.json).
  * Gemini calls: proxied using GEMINI_API_KEY from .env.
  * Auth: cookie-based password gate, active only when AUTH_PASSWORD is set.
+ *   Login is rate-limited (express-rate-limit) to prevent brute-force attacks.
  *
  * Run alongside Vite: npm run dev
  * Or standalone:      npm run server
@@ -18,6 +19,7 @@ import { unlink } from 'fs/promises';
 import { createHmac, createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import rateLimit from 'express-rate-limit';
 
 // ── Load .env manually (no dotenv dependency needed) ─────────────────────────
 try {
@@ -144,7 +146,18 @@ app.get('/login', (_req, res) => {
 </html>`);
 });
 
-app.post('/api/login', (req, res) => {
+// Brute-force protection: 5 attempts per 15 minutes per IP.
+// In-memory store resets on restart, which is acceptable for a single-process
+// deploy. Only applied to this route — other endpoints are behind auth already.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Too many login attempts — try again in 15 minutes' } },
+});
+
+app.post('/api/login', loginLimiter, (req, res) => {
   const { password } = req.body;
   const token = AUTH_TOKEN
     ? createHmac('sha256', password || '').update('vocab-quest').digest('hex')
