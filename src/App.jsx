@@ -2059,6 +2059,7 @@ function SpellCard({ asset, onCorrect }) {
   const [pos, setPos] = useState(0);           // current char index (trace/review)
   const [recallChars, setRecallChars] = useState([]);
   const [recallMistakes, setRecallMistakes] = useState(0);
+  const recallMistakesRef = useRef(0);
   const [flash, setFlash] = useState(-1);      // index of wrong-char flash
   const inputRef = useRef(null);
   const stageRef = useRef(stage);
@@ -2100,7 +2101,8 @@ function SpellCard({ asset, onCorrect }) {
           } else {
             // review retype complete → report score
             correctSound.play();
-            setTimeout(() => onCorrect(recallMistakes), 1000);
+            const m = recallMistakesRef.current;
+            setTimeout(() => onCorrect(m), 1000);
           }
         }
       } else {
@@ -2117,6 +2119,7 @@ function SpellCard({ asset, onCorrect }) {
           if (newChars[i] !== lower[i]) mistakes++;
         }
         setRecallMistakes(mistakes);
+        recallMistakesRef.current = mistakes;
         if (mistakes === 0) {
           // Perfect — brief pause then advance
           correctSound.play();

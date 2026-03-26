@@ -56,12 +56,13 @@ function sm2Update(record, quality) {
   };
 }
 
-function qualityFromScores(meaningScore, blankScore) {
-  // Map game scores to SM-2 quality; use the minimum across both task types
+function qualityFromScores(meaningScore, blankScore, spellingScore) {
+  // Map game scores to SM-2 quality; use the minimum across all task types
   const scoreToQuality = { correct: 5, retry: 3, wrong: 1 };
   const mq = scoreToQuality[meaningScore] ?? 1;
   const bq = scoreToQuality[blankScore] ?? 1;
-  return Math.min(mq, bq);
+  const sq = scoreToQuality[spellingScore] ?? 1;
+  return Math.min(mq, bq, sq);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -95,9 +96,10 @@ export async function recordSession(session) {
     const key = word.toLowerCase();
     const existing = data.wordRecords[key];
 
-    const meaningScore = tasks["meaning"]?.firstTry ? "correct" : (tasks["meaning"] ? "retry" : null);
-    const blankScore   = tasks["fill-blank"]?.firstTry ? "correct" : (tasks["fill-blank"] ? "retry" : null);
-    const quality = qualityFromScores(meaningScore ?? "wrong", blankScore ?? "wrong");
+    const meaningScore  = tasks["meaning"]?.firstTry ? "correct" : (tasks["meaning"] ? "retry" : null);
+    const blankScore    = tasks["fill-blank"]?.firstTry ? "correct" : (tasks["fill-blank"] ? "retry" : null);
+    const spellingScore = tasks["spelling"]?.firstTry ? "correct" : (tasks["spelling"] ? "retry" : null);
+    const quality = qualityFromScores(meaningScore ?? "wrong", blankScore ?? "wrong", spellingScore ?? "wrong");
 
     if (!existing) {
       // First time seeing this word — create record, then apply first SM-2 update
