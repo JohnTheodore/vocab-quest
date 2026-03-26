@@ -14,7 +14,7 @@ import express from 'express';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { unlink } from 'fs/promises';
-import { createHmac } from 'crypto';
+import { createHmac, createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
@@ -327,6 +327,86 @@ app.delete('/api/kv/:key', async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+// ── DELETE /api/books/:hash — remove a book and all associated data ─────────
+//
+// Previously, book deletion was orchestrated client-side: the browser loaded
+// the book data, computed chapter hashes, then issued dozens of sequential
+// DELETE /api/kv/:key calls — one per word list, illustration, story bible,
+// etc. Each call was a full HTTP round trip, so a book with 10 chapters and
+// cached illustrations took ~20 seconds to delete.
+//
+// This endpoint moves that logic server-side. The server reads the book data
+// from the local filesystem (no network hop), computes chapter hashes with
+// Node's crypto (no async overhead), collects every related file path, and
+// deletes them all in parallel with Promise.all. The whole operation completes
+// in a single HTTP round trip (~100ms).
+//
+// Deleted data: vocab-book-{hash}, storybible-{hash}, wordlist-{chapterHash},
+// illust-index-{chapterHash}, illust-{chapterHash}-{word}, and the index entry.
+app.delete('/api/books/:hash', async (req, res) => {
+  const bookHash = sanitizeKey(req.params.hash);
+  const bookFile = join(DATA_DIR, `vocab-book-${bookHash}.json`);
+
+  // Collect all files to delete — start with book-level files
+  const toDelete = [
+    bookFile,
+    join(DATA_DIR, `storybible-${bookHash}.json`),
+  ];
+
+  // Read the book data to discover chapter-level keys. The chapter hash is
+  // derived from each chapter's text using the same SHA-256 algorithm as the
+  // client (first 32 hex chars), so we find the exact same file names.
+  try {
+    if (existsSync(bookFile)) {
+      const raw = readFileSync(bookFile, 'utf8');
+      const bookData = JSON.parse(raw);
+      for (const ch of bookData.chapters || []) {
+        const chapterHash = createHash('sha256').update(ch.text).digest('hex').slice(0, 32);
+        toDelete.push(join(DATA_DIR, `wordlist-${chapterHash}.json`));
+
+        // The illustration index lists which words have cached images.
+        // We need to read it to discover per-word illustration file names.
+        const illustIndexFile = join(DATA_DIR, `illust-index-${chapterHash}.json`);
+        try {
+          if (existsSync(illustIndexFile)) {
+            const words = JSON.parse(readFileSync(illustIndexFile, 'utf8'));
+            for (const w of words) {
+              toDelete.push(join(DATA_DIR, `illust-${chapterHash}-${sanitizeKey(w)}.json`));
+            }
+          }
+        } catch {}
+        toDelete.push(illustIndexFile);
+      }
+    }
+  } catch (err) {
+    console.error('Error reading book data for cleanup:', err);
+    // Best-effort: continue deleting whatever files we already found
+  }
+
+  // Delete all files in parallel — each unlink is independent, and failures
+  // (e.g. file already gone) are silently ignored.
+  await Promise.all(toDelete.map(f => unlink(f).catch(() => {})));
+
+  // Update the book index atomically (write .tmp then rename)
+  const indexFile = join(DATA_DIR, `${sanitizeKey(BOOK_INDEX_KEY)}.json`);
+  try {
+    if (existsSync(indexFile)) {
+      const index = JSON.parse(readFileSync(indexFile, 'utf8'));
+      const updated = index.filter(b => b.hash !== req.params.hash);
+      const tmp = join(DATA_DIR, `${sanitizeKey(BOOK_INDEX_KEY)}.tmp`);
+      writeFileSync(tmp, JSON.stringify(updated), 'utf8');
+      renameSync(tmp, indexFile);
+    }
+  } catch (err) {
+    console.error('Error updating book index:', err);
+    return res.status(500).json({ error: { message: 'Failed to update book index' } });
+  }
+
+  res.json({ ok: true });
+});
+
+const BOOK_INDEX_KEY = 'vocab-books-index';
 
 // Health check
 app.get('/api/health', (_req, res) => {

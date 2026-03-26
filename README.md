@@ -119,7 +119,29 @@ The app is a React frontend (`src/App.jsx`) backed by an Express API server (`se
 
 ---
 
-### 7. Data persistence
+### 7. API
+
+The Express server (`server.js`) exposes the following endpoints. All endpoints below `/api/` require authentication when `AUTH_PASSWORD` is set.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/login` | Login page (HTML) |
+| `POST` | `/api/login` | Authenticate with password, sets session cookie |
+| `GET` | `/api/logout` | Clear session cookie and redirect to login |
+| `POST` | `/api/claude` | Proxy a prompt to Claude via the Agent SDK |
+| `POST` | `/api/gemini/:model` | Proxy a request to the Google Gemini API |
+| `GET` | `/api/kv/:key` | Read a value from the key-value store |
+| `PUT` | `/api/kv/:key` | Write a value to the key-value store (atomic via tmp+rename) |
+| `DELETE` | `/api/kv/:key` | Delete a single key from the key-value store |
+| `DELETE` | `/api/books/:hash` | Delete a book and all associated data (story bible, word lists, illustrations) in a single server-side operation |
+| `GET` | `/api/health` | Health check — returns `{ status: "ok" }` |
+| `GET` | `/api/gemini-available` | Check whether a Gemini API key is configured |
+
+**Why `DELETE /api/books/:hash` exists:** Deleting a book requires removing dozens of related files (word lists per chapter, illustrations per word, story bible, the book data itself, and the index entry). Previously this was done client-side with sequential HTTP calls to `DELETE /api/kv/:key`, which took ~20 seconds for a book with many chapters. The dedicated endpoint does all cleanup server-side with local filesystem access and parallel deletes, completing in ~100ms.
+
+---
+
+### 8. Data persistence
 
 All application data — uploaded books, progress, generated illustrations, story bibles, word caches — is stored server-side via a generic key-value store (`/api/kv/:key`). Each key is saved as a separate JSON file in the `data/` directory (configurable via `DATA_DIR`). Writes use atomic rename (write to `.tmp`, then `fs.rename`) so a crash mid-write can't corrupt a file.
 
@@ -138,7 +160,7 @@ All application data — uploaded books, progress, generated illustrations, stor
 
 ---
 
-### 8. Progress tracking & spaced repetition
+### 9. Progress tracking & spaced repetition
 
 The app tracks every word you encounter and uses the **SM-2 algorithm** (the same algorithm behind Anki) to schedule future reviews. Progress data is persisted on the server and can also be exported as a JSON file.
 
