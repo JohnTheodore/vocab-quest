@@ -663,7 +663,7 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --gold: #6b5218;
@@ -697,7 +697,7 @@ const STYLES = `
     padding: 40px 16px 80px;
   }
   .app-title { text-align: center; margin-bottom: 36px; }
-  .app-title h1 { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 700; color: var(--gold); letter-spacing: 0.02em; }
+  .app-title h1 { font-family: 'Source Serif 4', Georgia, serif; font-size: 28px; font-weight: 600; color: var(--gold); letter-spacing: 0.02em; }
   .app-title p { font-size: 13px; color: var(--gold-dim); opacity: 0.7; margin-top: 4px; font-style: normal; }
 
   .card {
@@ -725,7 +725,7 @@ const STYLES = `
   }
   .upload-zone:hover, .upload-zone.drag-over { border-color: rgba(100,70,20,0.4); background: rgba(100,70,20,0.03); }
   .upload-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
-  .upload-zone h2 { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--gold); margin-bottom: 8px; }
+  .upload-zone h2 { font-family: 'Source Serif 4', Georgia, serif; font-size: 20px; color: var(--gold); margin-bottom: 8px; }
   .upload-zone p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
   .upload-zone input { display: none; }
 
@@ -741,7 +741,7 @@ const STYLES = `
   .book-entry:has(.book-cache-panel) .book-item { border-radius: 3px 3px 0 0; margin-bottom: 0; }
   .book-item:hover { background: rgba(100,70,20,0.04); border-color: rgba(100,70,20,0.2); }
   .book-item-info { flex: 1; min-width: 0; }
-  .book-item-title { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book-item-title { font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .book-item-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
   .book-item-actions { flex-shrink: 0; margin-left: 12px; display: flex; gap: 6px; align-items: center; }
   .book-item-btn {
@@ -800,7 +800,7 @@ const STYLES = `
   .count-label { font-size: 14px; color: var(--text-dim); }
   .count-btn { background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.18); border-radius: 3px; width: 32px; height: 32px; font-size: 18px; color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .count-btn:hover { background: rgba(100,70,20,0.12); }
-  .count-val { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: var(--gold); width: 32px; text-align: center; }
+  .count-val { font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600; color: var(--gold); width: 32px; text-align: center; }
 
   /* Word suggestion list */
   .word-suggestion {
@@ -820,7 +820,7 @@ const STYLES = `
   .word-suggestion.suggested { border-color: rgba(100,70,20,0.18); }
   .ws-check { width: 20px; height: 20px; border: 1.5px solid rgba(100,70,20,0.25); border-radius: 3px; flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--gold); }
   .word-suggestion.selected .ws-check { background: rgba(100,70,20,0.12); }
-  .ws-word { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--gold); }
+  .ws-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 17px; font-weight: 600; color: var(--gold); }
   .ws-badge { display: inline-block; font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold-dim); border: 1px solid rgba(100,70,20,0.18); border-radius: 2px; padding: 1px 5px; margin-left: 8px; vertical-align: middle; }
   .ws-reason { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; font-style: normal; }
 
@@ -833,7 +833,7 @@ const STYLES = `
   .gen-item.done .gen-dot { background: var(--correct-text); }
   .gen-item.active .gen-dot { background: var(--gold); animation: pulse 1s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .gen-word { font-family: 'Playfair Display', serif; font-size: 14px; color: var(--text-dim); }
+  .gen-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 14px; color: var(--text-dim); }
   .gen-item.done .gen-word { color: var(--correct-text); }
   .gen-item.active .gen-word { color: var(--gold); }
 
@@ -842,11 +842,11 @@ const STYLES = `
   .illustration-area { width: 100%; overflow: hidden; }
   .illustration-area img { width: 100%; height: auto; max-height: 28vh; object-fit: contain; display: block; animation: imgFade 0.8s ease; }
   .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(100,70,20,0.06); display: flex; align-items: baseline; gap: 14px; }
-  .vocab-word { font-family: 'Playfair Display', serif; font-size: 34px; font-weight: 700; color: var(--gold); }
+  .vocab-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 34px; font-weight: 600; color: var(--gold); }
   .word-pos { font-size: 12px; font-style: normal; color: rgba(100,70,20,0.45); }
   .paragraph-text { font-size: 15px; line-height: 1.7; color: var(--text-dim); font-style: normal; }
   .paragraph-text mark { background: rgba(120,80,20,0.1); color: #6b5218; border-radius: 2px; padding: 1px 3px; font-style: normal; }
-  .question-text { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 16px; }
+  .question-text { font-family: 'Source Serif 4', Georgia, serif; font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 16px; }
   .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .opt-btn {
     background: rgba(100,70,20,0.02);
@@ -864,7 +864,7 @@ const STYLES = `
   .opt-btn:hover:not(:disabled) { background: rgba(100,70,20,0.06); border-color: rgba(100,70,20,0.22); color: var(--text); }
   .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
   .opt-btn.eliminated { opacity: 0.35; cursor: not-allowed; background: rgba(100,70,20,0.01); border-color: rgba(100,70,20,0.05); color: rgba(80,60,30,0.35); text-decoration: line-through; text-decoration-color: rgba(80,60,30,0.2); }
-  .opt-btn.blank-opt { font-family: "Playfair Display", serif; font-style: normal; font-size: 14.5px; }
+  .opt-btn.blank-opt { font-family: 'Source Serif 4', Georgia, serif; font-style: normal; font-size: 14.5px; }
   .options-grid.blank-options { grid-template-columns: 1fr; }
   .blank-row { display: flex; gap: 24px; align-items: flex-start; }
   .blank-row .options-grid.blank-options { flex: 1 1 55%; min-width: 0; }
@@ -878,13 +878,13 @@ const STYLES = `
   @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
   .feedback-banner.hint { background: rgba(140,100,20,0.07); border: 1px solid rgba(140,100,20,0.2); color: #6b5218; }
   .feedback-banner.correct { background: var(--correct); border: 1px solid var(--correct-border); color: var(--correct-text); }
-  .fb-head { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-  .next-btn { margin-top: 22px; width: 100%; background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.2); border-radius: 3px; padding: 13px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; letter-spacing: 0.03em; transition: all 0.15s; }
+  .fb-head { font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .next-btn { margin-top: 22px; width: 100%; background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.2); border-radius: 3px; padding: 13px; font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; color: var(--gold); cursor: pointer; letter-spacing: 0.03em; transition: all 0.15s; }
   .next-btn:hover { background: rgba(100,70,20,0.12); border-color: rgba(100,70,20,0.35); }
-  .primary-btn { background: rgba(100,70,20,0.08); border: 1px solid rgba(100,70,20,0.25); border-radius: 3px; padding: 12px 28px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .primary-btn { background: rgba(100,70,20,0.08); border: 1px solid rgba(100,70,20,0.25); border-radius: 3px; padding: 12px 28px; font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
   .primary-btn:hover { background: rgba(100,70,20,0.15); }
   .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .secondary-btn { background: transparent; border: 1px solid rgba(100,70,20,0.15); border-radius: 3px; padding: 8px 20px; font-family: 'Playfair Display', serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .secondary-btn { background: transparent; border: 1px solid rgba(100,70,20,0.15); border-radius: 3px; padding: 8px 20px; font-family: 'Source Serif 4', Georgia, serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
   .secondary-btn:hover { border-color: rgba(100,70,20,0.3); color: var(--gold); }
 
   /* Exercise label bar — small, muted header so it doesn't compete with the definition */
@@ -921,7 +921,7 @@ const STYLES = `
   }
   .spell-char {
     display: inline-flex; align-items: center; justify-content: center; flex-direction: column;
-    width: 32px; height: 42px; font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700;
+    width: 32px; height: 42px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600;
     border-radius: 3px; position: relative; transition: all 0.2s;
   }
   .spell-char.spell-ghost {
@@ -970,7 +970,7 @@ const STYLES = `
   }
   .spell-correct-hint {
     position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
-    font-size: 13px; color: var(--correct-text); font-weight: 700;
+    font-size: 13px; color: var(--correct-text); font-weight: 600;
   }
   .spell-hidden-input {
     position: absolute; inset: 0; width: 100%; height: 100%;
@@ -990,7 +990,7 @@ const STYLES = `
     display: flex; align-items: center; justify-content: space-between;
     border-radius: 3px; padding: 10px 16px; margin-bottom: 8px;
   }
-  .rwc-word { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 17px; }
+  .rwc-word { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; font-size: 17px; }
   .rwc-label { font-size: 12px; opacity: 0.8; letter-spacing: 0.04em; }
 
   .spinner { width: 32px; height: 32px; border: 2px solid rgba(100,70,20,0.1); border-top-color: rgba(100,70,20,0.5); border-radius: 50%; animation: spin 0.9s linear infinite; }
@@ -1572,7 +1572,7 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
                 <div className="section-label" style={{marginBottom:8}}>Characters</div>
                 {bible.characters.map(c => (
                   <div key={c.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(100,70,20,0.02)",border:"1px solid rgba(100,70,20,0.06)",borderRadius:3}}>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{c.name}</div>
+                    <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{c.name}</div>
                     <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"normal"}}>{c.promptFragment}</div>
                   </div>
                 ))}
@@ -1583,7 +1583,7 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
                 <div className="section-label" style={{marginBottom:8}}>Settings</div>
                 {bible.settings.map(s => (
                   <div key={s.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(100,70,20,0.02)",border:"1px solid rgba(100,70,20,0.06)",borderRadius:3}}>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{s.name}</div>
+                    <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{s.name}</div>
                     <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"normal"}}>{s.promptFragment}</div>
                   </div>
                 ))}
@@ -2330,10 +2330,10 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
   return (
     <div className="card">
       <div className="card-body" style={{textAlign:"center"}}>
-        <div style={{fontFamily:"'Playfair Display',serif",fontSize:52,color:"var(--gold)",marginBottom:10}}>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:52,color:"var(--gold)",marginBottom:10}}>
           {allPerfect ? "✦" : "◆"}
         </div>
-        <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:700,color:"var(--text)",marginBottom:6}}>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:24,fontWeight:600,color:"var(--text)",marginBottom:6}}>
           {allPerfect ? "Perfect score, Scholar!" : "Well done!"}
         </div>
         <div style={{fontSize:13,color:"var(--gold-dim)",marginBottom:24,fontStyle:"normal"}}>{chapterTitle} · {bookTitle}</div>
