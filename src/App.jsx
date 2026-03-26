@@ -839,8 +839,18 @@ const STYLES = `
 
   /* Game – quiz card with illustration + question content */
   @keyframes imgFade { from{opacity:0} to{opacity:1} }
-  .illustration-area { width: 100%; overflow: hidden; }
-  .illustration-area img { width: 100%; height: auto; max-height: 28vh; object-fit: contain; display: block; animation: imgFade 0.8s ease; }
+  .illustration-area {
+    padding: 20px 24px 0; overflow: hidden;
+  }
+  .illustration-frame {
+    position: relative; width: 100%; aspect-ratio: 3/2; border-radius: 6px;
+    overflow: hidden; background: rgba(100,70,20,0.04);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06), 0 0 0 1px rgba(100,70,20,0.08);
+  }
+  .illustration-frame img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    animation: imgFade 0.8s ease;
+  }
   .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(100,70,20,0.06); display: flex; align-items: baseline; gap: 14px; }
   .vocab-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 34px; font-weight: 600; color: var(--gold); }
   .word-pos { font-size: 12px; font-style: normal; color: rgba(100,70,20,0.45); }
@@ -1079,8 +1089,9 @@ const STYLES = `
   /* .game-active is added to .app only during the question phase. */
   .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: center; }
   .app.game-active > .card { display: grid; grid-template-rows: 1fr 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
-  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 5%; }
-  .app.game-active .illustration-area img { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .app.game-active .illustration-frame { aspect-ratio: auto; width: 100%; height: 100%; }
+  .app.game-active .illustration-frame img { object-fit: contain; }
   .app.game-active .game-content { min-height: 0; overflow-y: auto; }
   .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
   .app.game-active .card-section:last-child { padding-bottom: 20px; }
@@ -1097,7 +1108,7 @@ const STYLES = `
   }
   @media (orientation: landscape) {
     .app.game-active > .card:has(.illustration-area) { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
-    .app.game-active .illustration-area img { height: 100%; width: 100%; }
+    .app.game-active .illustration-frame img { height: 100%; width: 100%; }
     .app.game-active .game-content { display: flex; flex-direction: column; }
   }
 `;
@@ -2282,7 +2293,9 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
 
           {current.image && (
             <div className="illustration-area">
-              <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
+              <div className="illustration-frame">
+                <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
+              </div>
             </div>
           )}
           {/* Word + paragraph merged into one section (no separate banner / "From the text" label)
