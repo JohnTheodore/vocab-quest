@@ -341,12 +341,23 @@ describe("sm2Update", () => {
 
   it("ease factor never drops below 1.3", () => {
     let record = { ...freshRecord };
-    // Repeatedly fail then retry to push ease factor down without interval overflow
+    // Repeatedly fail then retry to push ease factor down
     for (let i = 0; i < 20; i++) {
       record = sm2Update(record, 1); // fail → resets interval to 1
-      record = sm2Update(record, 3); // retry → keeps interval small
+      record = sm2Update(record, 3); // retry
     }
     assert.ok(record.easeFactor >= 1.3, `Ease factor ${record.easeFactor} dropped below 1.3`);
+  });
+
+  it("interval is capped at 365 days (no Date overflow)", () => {
+    let record = { ...freshRecord };
+    // Many consecutive perfect answers would grow interval exponentially
+    for (let i = 0; i < 50; i++) {
+      record = sm2Update(record, 5);
+    }
+    assert.ok(record.interval <= 365, `Interval ${record.interval} exceeded 365-day cap`);
+    // nextReviewDate should be valid, not Invalid Date
+    assert.ok(!isNaN(new Date(record.nextReviewDate).getTime()), "nextReviewDate is invalid");
   });
 
   it("sets nextReviewDate to a future date", () => {

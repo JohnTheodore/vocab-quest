@@ -35,7 +35,7 @@ export function sm2Update(record, quality) {
   if (quality >= 3) {
     if (repetitions === 0)      interval = 1;
     else if (repetitions === 1) interval = 6;
-    else                        interval = Math.round(interval * easeFactor);
+    else                        interval = Math.min(365, Math.round(interval * easeFactor));
     repetitions += 1;
     easeFactor = Math.max(1.3, easeFactor + 0.1 - (5 - quality) * 0.08);
   } else {
