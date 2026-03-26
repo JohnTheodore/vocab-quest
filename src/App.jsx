@@ -864,7 +864,7 @@ const STYLES = `
   .opt-btn:hover:not(:disabled) { background: rgba(100,70,20,0.06); border-color: rgba(100,70,20,0.22); color: var(--text); }
   .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
   .opt-btn.eliminated { opacity: 0.35; cursor: not-allowed; background: rgba(100,70,20,0.01); border-color: rgba(100,70,20,0.05); color: rgba(80,60,30,0.35); text-decoration: line-through; text-decoration-color: rgba(80,60,30,0.2); }
-  .opt-btn.blank-opt { font-family: 'Source Serif 4', Georgia, serif; font-style: normal; font-size: 14.5px; }
+  .opt-btn.blank-opt { font-family: 'Source Serif 4', Georgia, serif; font-style: normal; font-size: 16px; }
   .options-grid.blank-options { grid-template-columns: 1fr; }
   .blank-row { display: flex; gap: 24px; align-items: flex-start; }
   .blank-row .options-grid.blank-options { flex: 1 1 55%; min-width: 0; }
@@ -977,6 +977,34 @@ const STYLES = `
     opacity: 0; font-size: 16px; cursor: default; z-index: 1;
   }
 
+  /* Game progress bar — inline, with phase labels and step counter */
+  .game-progress-bar {
+    width: 100%; max-width: 660px; margin-bottom: 16px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .gp-phases {
+    display: flex; justify-content: center; gap: 20px;
+  }
+  .gp-phase {
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: rgba(100,70,20,0.25); transition: color 0.3s;
+  }
+  .gp-phase.gp-active {
+    color: var(--gold); font-weight: 600;
+  }
+  .gp-track {
+    width: 100%; height: 6px; border-radius: 3px;
+    background: rgba(100,70,20,0.08); overflow: hidden;
+  }
+  .gp-fill {
+    height: 100%; background: var(--gold); border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .gp-count {
+    text-align: center; font-size: 11px; color: rgba(100,70,20,0.4);
+    letter-spacing: 0.04em;
+  }
+
   /* Score strip */
   .score-strip { display: flex; justify-content: center; gap: 7px; margin-bottom: 20px; flex-wrap: wrap; }
   .score-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(100,70,20,0.2); background: transparent; transition: all 0.3s; }
@@ -1027,7 +1055,7 @@ const STYLES = `
     .word-banner { padding: 20px 40px 16px; }
     .chapter-list { max-height: 560px; }
     .opt-btn { font-size: 14.5px; line-height: 1.5; }
-    .opt-btn.blank-opt { font-size: 15.5px; }
+    .opt-btn.blank-opt { font-size: 17px; }
     .vocab-word { font-size: 38px; }
     .question-text { font-size: 18px; }
     .paragraph-text { font-size: 16px; }
@@ -2198,8 +2226,10 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
     advance(newScores);
   }
 
+  const totalExercises = queue.length;
+  const progressPct = (queuePos / totalExercises) * 100;
+
   const roundType = current.roundType;
-  const roundLabels = { meaning: "◆ What does this word mean?", blank: "◆ Fill in the Blank", spell: "◆ Spelling Practice" };
   const dotScores = assets.map(a => {
     const s = scores[a.word];
     const scoreKey = roundType === "blank" ? "blank" : roundType === "spell" ? "spelling" : "meaning";
@@ -2208,10 +2238,26 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
     return score || "";
   });
 
+  const phases = [
+    { key: "meaning", label: "Meaning" },
+    { key: "blank",   label: "Fill in blank" },
+    { key: "spell",   label: "Spelling" },
+  ];
+
   return (
     <>
-      <div style={{textAlign:"center",marginBottom:10,fontSize:11,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(100,70,20,0.4)"}}>
-        {roundLabels[roundType]}
+      <div className="game-progress-bar">
+        <div className="gp-phases">
+          {phases.map(p => (
+            <span key={p.key} className={`gp-phase${p.key === roundType ? " gp-active" : ""}`}>
+              {p.label}
+            </span>
+          ))}
+        </div>
+        <div className="gp-track">
+          <div className="gp-fill" style={{width:`${progressPct}%`}}/>
+        </div>
+        <div className="gp-count">{queuePos + 1} of {totalExercises}</div>
       </div>
       <div className="score-strip">
         {dotScores.map((s, i) => (
