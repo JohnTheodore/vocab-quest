@@ -11,6 +11,7 @@
  */
 
 import express from 'express';
+import helmet from 'helmet';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { unlink } from 'fs/promises';
@@ -68,6 +69,13 @@ function requireAuth(req, res, next) {
 }
 
 const app = express();
+// Security headers (X-Frame-Options, HSTS, nosniff, etc.). CSP is disabled
+// because the app uses inline styles, CDN scripts (JSZip), Google Fonts, and
+// base64 data-URI images — all of which conflict with a strict CSP. The other
+// headers still provide meaningful protection (clickjacking, MIME sniffing,
+// HTTPS enforcement). CSP can be enabled later when CSS is extracted to a file
+// and JSZip is bundled.
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
