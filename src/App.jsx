@@ -117,6 +117,10 @@ async function loadJSZip() {
   return window.JSZip;
 }
 
+// XSS note: htmlToText and extractHeadingFromHtml use innerHTML on a detached
+// DOM element to parse EPUB chapter HTML. The parsed HTML never enters the visible
+// DOM — we only extract .textContent from it. The source is a user-uploaded EPUB,
+// so the threat model is self-targeting (the user uploaded the file themselves).
 function htmlToText(html) {
   const d = document.createElement("div");
   d.innerHTML = html;
@@ -2031,6 +2035,8 @@ function BlankCard({ asset, onCorrect }) {
         <span>Fill in the blank</span>
         <span className="exercise-label-tag">review</span>
       </div>
+      {/* XSS safe: definition is a Claude-generated string rendered as a JSX
+          text child (auto-escaped by React), not via dangerouslySetInnerHTML. */}
       <div className="card-section definition-section">
         <div style={{fontSize:17,lineHeight:1.7,color:"var(--text)"}}>
           {asset.options.options[asset.options.correct]}
@@ -2470,6 +2476,9 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
             {phase !== "correct" && (
             <>
             <div className="question-text">What does "{current.word}" mean?</div>
+            {/* XSS safety: options and hints are Claude-generated strings rendered as
+                JSX text children, NOT via dangerouslySetInnerHTML. React auto-escapes
+                them, so any HTML in the response displays as literal text. */}
             <div className="options-grid">
               {current.options.options.map((opt, i) => {
                 let cls = "opt-btn";
