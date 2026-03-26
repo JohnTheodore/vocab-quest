@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { recordSession, exportData } from "./wordRecords.js";
 
 // Is live Gemini image generation available? Asks the server so this works in prod too.
@@ -16,6 +16,94 @@ async function checkGeminiAvailable() {
   return _geminiAvailableCache;
 }
 
+
+// ── Correct-answer chimes (Web Audio API, no files needed) ────────────────────
+const correctSound = (() => {
+  let ctx = null;
+  let muted = localStorage.getItem("vq-muted") === "1";
+
+  function getCtx() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+
+  // Marimba-like tone: sine fundamental + quiet 2nd harmonic, bright attack, reverb tail
+  function chimeNote(ac, freq, start, vol) {
+    // Fundamental (sine)
+    const osc1 = ac.createOscillator();
+    const g1 = ac.createGain();
+    osc1.type = "sine";
+    osc1.frequency.value = freq;
+    // Bright attack: instant peak then fast initial drop, then slow reverb tail
+    g1.gain.setValueAtTime(vol, start);
+    g1.gain.setTargetAtTime(vol * 0.35, start + 0.015, 0.04); // fast drop to 35%
+    g1.gain.setTargetAtTime(0.001, start + 0.06, 0.12);        // slow reverb tail
+
+    // 2nd harmonic (adds brightness to attack, fades faster)
+    const osc2 = ac.createOscillator();
+    const g2 = ac.createGain();
+    osc2.type = "sine";
+    osc2.frequency.value = freq * 2;
+    g2.gain.setValueAtTime(vol * 0.3, start);
+    g2.gain.setTargetAtTime(0.001, start + 0.01, 0.04); // fades quickly
+
+    // 3rd harmonic (very quiet, adds initial "ding" brightness)
+    const osc3 = ac.createOscillator();
+    const g3 = ac.createGain();
+    osc3.type = "sine";
+    osc3.frequency.value = freq * 3;
+    g3.gain.setValueAtTime(vol * 0.08, start);
+    g3.gain.setTargetAtTime(0.001, start + 0.005, 0.02);
+
+    [osc1, osc2, osc3].forEach((o, i) => {
+      const g = [g1, g2, g3][i];
+      o.connect(g);
+      g.connect(ac.destination);
+      o.start(start);
+      o.stop(start + 0.6);
+    });
+  }
+
+  // Three variations — rising intervals, marimba timbre, ~200-300ms perceived
+  const chimes = [
+    // 1: Rising major third (C6→E6) — bright, simple
+    (ac) => {
+      const t = ac.currentTime;
+      chimeNote(ac, 1046.5, t, 0.18);
+      chimeNote(ac, 1318.5, t + 0.1, 0.2);
+    },
+    // 2: Rising perfect fifth (G5→D6) — open, warm
+    (ac) => {
+      const t = ac.currentTime;
+      chimeNote(ac, 783.99, t, 0.17);
+      chimeNote(ac, 1174.7, t + 0.11, 0.19);
+    },
+    // 3: Rising arpeggio (E5→G5→C6) — playful, resolved
+    (ac) => {
+      const t = ac.currentTime;
+      chimeNote(ac, 659.25, t, 0.14);
+      chimeNote(ac, 783.99, t + 0.08, 0.16);
+      chimeNote(ac, 1046.5, t + 0.16, 0.18);
+    },
+  ];
+
+  return {
+    play() {
+      if (muted) return;
+      try {
+        const ac = getCtx();
+        chimes[Math.floor(Math.random() * chimes.length)](ac);
+      } catch (_) { /* audio not available — silently ignore */ }
+    },
+    get muted() { return muted; },
+    toggle() {
+      muted = !muted;
+      localStorage.setItem("vq-muted", muted ? "1" : "0");
+      return muted;
+    },
+  };
+})();
 
 // ── EPUB parser (uses JSZip via CDN, loaded dynamically) ──────────────────────
 async function loadJSZip() {
@@ -679,32 +767,33 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --gold: #d4a843;
-    --gold-dim: #b8902a;
-    --gold-faint: rgba(180,130,50,0.18);
-    --bg: #1c1509;
-    --card-bg: linear-gradient(160deg, #2a1f0e 0%, #1e1508 100%);
-    --text: #e8d5a3;
-    --text-dim: #c9b882;
-    --border: rgba(180,130,50,0.2);
-    --correct: rgba(80,160,80,0.15);
-    --correct-border: rgba(100,200,100,0.45);
-    --correct-text: #a0e0a0;
-    --wrong: rgba(180,60,60,0.12);
-    --wrong-border: rgba(200,80,80,0.4);
-    --wrong-text: #e09090;
-    --retry-text: #d4b86a;
+    --gold: #6b5218;
+    --gold-dim: #8a6d2e;
+    --gold-faint: rgba(100,70,20,0.08);
+    --bg: #f8f5ef;
+    --card-bg: #ffffff;
+    --text: #2c2218;
+    --text-dim: #5a4d3a;
+    --border: rgba(100,70,20,0.12);
+    --correct: rgba(34,120,34,0.08);
+    --correct-border: rgba(34,120,34,0.3);
+    --correct-text: #1a7a1a;
+    --wrong: rgba(190,40,40,0.06);
+    --wrong-border: rgba(190,50,50,0.25);
+    --wrong-text: #b83030;
+    --retry-text: #8b6914;
+    --accent: rgba(100,70,20,var(--a,0.1));
   }
   body { background: var(--bg); }
   .app {
     min-height: 100vh;
     background: var(--bg);
-    background-image: radial-gradient(ellipse at 15% 10%, rgba(180,130,50,0.07) 0%, transparent 55%),
-                      radial-gradient(ellipse at 85% 90%, rgba(120,60,20,0.09) 0%, transparent 55%);
-    font-family: 'Lora', serif;
+    background-image: radial-gradient(ellipse at 15% 10%, rgba(180,140,80,0.05) 0%, transparent 55%),
+                      radial-gradient(ellipse at 85% 90%, rgba(140,100,40,0.04) 0%, transparent 55%);
+    font-family: 'Source Serif 4', Georgia, serif;
     color: var(--text);
     display: flex;
     flex-direction: column;
@@ -712,25 +801,25 @@ const STYLES = `
     padding: 40px 16px 80px;
   }
   .app-title { text-align: center; margin-bottom: 36px; }
-  .app-title h1 { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 700; color: var(--gold); letter-spacing: 0.02em; }
-  .app-title p { font-size: 13px; color: var(--gold-dim); opacity: 0.7; margin-top: 4px; font-style: italic; }
+  .app-title h1 { font-family: 'Source Serif 4', Georgia, serif; font-size: 28px; font-weight: 600; color: var(--gold); letter-spacing: 0.02em; }
+  .app-title p { font-size: 13px; color: var(--gold-dim); opacity: 0.7; margin-top: 4px; font-style: normal; }
 
   .card {
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 4px;
-    box-shadow: 0 8px 48px rgba(0,0,0,0.55), inset 0 1px 0 rgba(180,130,50,0.08);
+    box-shadow: 0 2px 16px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
     width: 100%;
     max-width: 660px;
     overflow: hidden;
   }
   .card-body { padding: 28px 32px 32px; }
-  .card-section { padding: 22px 32px; border-bottom: 1px solid rgba(180,130,50,0.08); }
-  .section-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(184,144,42,0.5); margin-bottom: 10px; }
+  .card-section { padding: 22px 32px; border-bottom: 1px solid rgba(100,70,20,0.06); }
+  .section-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(100,70,20,0.45); margin-bottom: 10px; }
 
   /* Upload */
   .upload-zone {
-    border: 2px dashed rgba(180,130,50,0.3);
+    border: 2px dashed rgba(100,70,20,0.2);
     border-radius: 4px;
     padding: 48px 24px;
     text-align: center;
@@ -738,66 +827,66 @@ const STYLES = `
     transition: all 0.2s;
     margin-bottom: 0;
   }
-  .upload-zone:hover, .upload-zone.drag-over { border-color: rgba(180,130,50,0.6); background: rgba(180,130,50,0.05); }
+  .upload-zone:hover, .upload-zone.drag-over { border-color: rgba(100,70,20,0.4); background: rgba(100,70,20,0.03); }
   .upload-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
-  .upload-zone h2 { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--gold); margin-bottom: 8px; }
+  .upload-zone h2 { font-family: 'Source Serif 4', Georgia, serif; font-size: 20px; color: var(--gold); margin-bottom: 8px; }
   .upload-zone p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
   .upload-zone input { display: none; }
 
   /* Book library */
   .book-library { margin-bottom: 20px; }
-  .book-library-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(184,144,42,0.5); margin-bottom: 10px; }
+  .book-library-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(100,70,20,0.45); margin-bottom: 10px; }
   .book-entry { margin-bottom: 8px; }
   .book-item {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; border: 1px solid rgba(180,130,50,0.15); border-radius: 3px;
+    padding: 12px 16px; border: 1px solid rgba(100,70,20,0.1); border-radius: 3px;
     cursor: pointer; transition: all 0.15s;
   }
   .book-entry:has(.book-cache-panel) .book-item { border-radius: 3px 3px 0 0; margin-bottom: 0; }
-  .book-item:hover { background: rgba(180,130,50,0.07); border-color: rgba(180,130,50,0.35); }
+  .book-item:hover { background: rgba(100,70,20,0.04); border-color: rgba(100,70,20,0.2); }
   .book-item-info { flex: 1; min-width: 0; }
-  .book-item-title { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book-item-title { font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .book-item-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
   .book-item-actions { flex-shrink: 0; margin-left: 12px; display: flex; gap: 6px; align-items: center; }
   .book-item-btn {
     padding: 4px 10px; font-size: 11px; border-radius: 3px; cursor: pointer; transition: all 0.15s;
-    background: rgba(180,130,50,0.08); border: 1px solid rgba(180,130,50,0.2); color: rgba(184,144,42,0.6);
+    background: rgba(100,70,20,0.05); border: 1px solid rgba(100,70,20,0.12); color: rgba(100,70,20,0.6);
   }
-  .book-item-btn:hover { background: rgba(180,130,50,0.15); border-color: rgba(180,130,50,0.35); }
+  .book-item-btn:hover { background: rgba(100,70,20,0.1); border-color: rgba(100,70,20,0.25); }
   .book-item-btn.kebab { font-weight: bold; letter-spacing: 1px; padding: 4px 8px; }
-  .book-item-btn.remove { color: #c08080; border-color: rgba(200,80,80,0.2); background: rgba(200,80,80,0.08); font-size: 14px; padding: 2px 8px; line-height: 1; }
-  .book-item-btn.remove:hover { background: rgba(200,80,80,0.2); border-color: rgba(200,80,80,0.4); }
+  .book-item-btn.remove { color: #b04040; border-color: rgba(190,50,50,0.15); background: rgba(190,50,50,0.05); font-size: 14px; padding: 2px 8px; line-height: 1; }
+  .book-item-btn.remove:hover { background: rgba(190,50,50,0.1); border-color: rgba(190,50,50,0.3); }
   .book-cache-panel {
-    padding: 12px 16px; margin: 0 0 8px; background: rgba(0,0,0,0.18);
-    border: 1px solid rgba(180,130,50,0.1); border-top: none; border-radius: 0 0 3px 3px;
+    padding: 12px 16px; margin: 0 0 8px; background: rgba(100,70,20,0.02);
+    border: 1px solid rgba(100,70,20,0.06); border-top: none; border-radius: 0 0 3px 3px;
   }
-  .cache-panel-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(184,144,42,0.4); margin-bottom: 8px; }
+  .cache-panel-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(100,70,20,0.4); margin-bottom: 8px; }
   .cache-layer-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 12px; color: var(--text-dim); }
   .cache-layer-cost { font-size: 10px; opacity: 0.45; }
   .cache-flush-btn {
     padding: 3px 10px; font-size: 10px; border-radius: 3px; cursor: pointer; transition: all 0.15s;
-    background: rgba(180,130,50,0.1); border: 1px solid rgba(180,130,50,0.2); color: rgba(184,144,42,0.6);
+    background: rgba(100,70,20,0.05); border: 1px solid rgba(100,70,20,0.12); color: rgba(100,70,20,0.6);
   }
-  .cache-flush-btn:hover { background: rgba(180,130,50,0.2); border-color: rgba(180,130,50,0.35); }
+  .cache-flush-btn:hover { background: rgba(100,70,20,0.1); border-color: rgba(100,70,20,0.25); }
   .cache-flush-all {
     margin-top: 8px; width: 100%; padding: 6px; font-size: 11px; border-radius: 3px; cursor: pointer;
-    background: rgba(200,80,80,0.08); border: 1px solid rgba(200,80,80,0.2); color: #c08080; transition: all 0.15s;
+    background: rgba(190,50,50,0.05); border: 1px solid rgba(190,50,50,0.15); color: #b04040; transition: all 0.15s;
   }
-  .cache-flush-all:hover { background: rgba(200,80,80,0.15); border-color: rgba(200,80,80,0.35); }
+  .cache-flush-all:hover { background: rgba(190,50,50,0.1); border-color: rgba(190,50,50,0.25); }
   .library-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--text-dim); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; }
-  .library-divider::before, .library-divider::after { content: ""; flex: 1; border-top: 1px solid rgba(180,130,50,0.12); }
+  .library-divider::before, .library-divider::after { content: ""; flex: 1; border-top: 1px solid rgba(100,70,20,0.08); }
 
   /* Chapter list */
   .chapter-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
   .chapter-list::-webkit-scrollbar { width: 4px; }
   .chapter-list::-webkit-scrollbar-track { background: transparent; }
-  .chapter-list::-webkit-scrollbar-thumb { background: rgba(180,130,50,0.3); border-radius: 2px; }
+  .chapter-list::-webkit-scrollbar-thumb { background: rgba(100,70,20,0.2); border-radius: 2px; }
   .chapter-btn {
-    background: rgba(255,255,255,0.02);
-    border: 1px solid rgba(180,130,50,0.14);
+    background: rgba(100,70,20,0.02);
+    border: 1px solid rgba(100,70,20,0.1);
     border-radius: 3px;
     padding: 11px 16px;
-    font-family: 'Lora', serif;
+    font-family: 'Source Serif 4', Georgia, serif;
     font-size: 14px;
     color: var(--text-dim);
     cursor: pointer;
@@ -807,15 +896,15 @@ const STYLES = `
     justify-content: space-between;
     align-items: center;
   }
-  .chapter-btn:hover { background: rgba(180,130,50,0.08); border-color: rgba(180,130,50,0.35); color: var(--text); }
+  .chapter-btn:hover { background: rgba(100,70,20,0.05); border-color: rgba(100,70,20,0.2); color: var(--text); }
   .chapter-btn .ch-words { font-size: 11px; opacity: 0.5; }
 
   /* Word count selector */
   .count-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
   .count-label { font-size: 14px; color: var(--text-dim); }
-  .count-btn { background: rgba(180,130,50,0.1); border: 1px solid rgba(180,130,50,0.3); border-radius: 3px; width: 32px; height: 32px; font-size: 18px; color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
-  .count-btn:hover { background: rgba(180,130,50,0.2); }
-  .count-val { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: var(--gold); width: 32px; text-align: center; }
+  .count-btn { background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.18); border-radius: 3px; width: 32px; height: 32px; font-size: 18px; color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+  .count-btn:hover { background: rgba(100,70,20,0.12); }
+  .count-val { font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600; color: var(--gold); width: 32px; text-align: center; }
 
   /* Word suggestion list */
   .word-suggestion {
@@ -823,54 +912,62 @@ const STYLES = `
     align-items: flex-start;
     gap: 14px;
     padding: 14px 16px;
-    border: 1px solid rgba(180,130,50,0.12);
+    border: 1px solid rgba(100,70,20,0.08);
     border-radius: 3px;
-    background: rgba(255,255,255,0.02);
+    background: rgba(100,70,20,0.015);
     cursor: pointer;
     transition: all 0.15s;
     margin-bottom: 8px;
   }
-  .word-suggestion:hover { background: rgba(180,130,50,0.06); border-color: rgba(180,130,50,0.3); }
-  .word-suggestion.selected { background: rgba(180,130,50,0.1); border-color: rgba(180,130,50,0.4); }
-  .word-suggestion.suggested { border-color: rgba(180,130,50,0.3); }
-  .ws-check { width: 20px; height: 20px; border: 1.5px solid rgba(180,130,50,0.4); border-radius: 3px; flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--gold); }
-  .word-suggestion.selected .ws-check { background: rgba(180,130,50,0.2); }
-  .ws-word { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--gold); }
-  .ws-badge { display: inline-block; font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold-dim); border: 1px solid rgba(180,130,50,0.3); border-radius: 2px; padding: 1px 5px; margin-left: 8px; vertical-align: middle; }
-  .ws-reason { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; font-style: italic; }
+  .word-suggestion:hover { background: rgba(100,70,20,0.04); border-color: rgba(100,70,20,0.18); }
+  .word-suggestion.selected { background: rgba(100,70,20,0.06); border-color: rgba(100,70,20,0.25); }
+  .word-suggestion.suggested { border-color: rgba(100,70,20,0.18); }
+  .ws-check { width: 20px; height: 20px; border: 1.5px solid rgba(100,70,20,0.25); border-radius: 3px; flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--gold); }
+  .word-suggestion.selected .ws-check { background: rgba(100,70,20,0.12); }
+  .ws-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 17px; font-weight: 600; color: var(--gold); }
+  .ws-badge { display: inline-block; font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold-dim); border: 1px solid rgba(100,70,20,0.18); border-radius: 2px; padding: 1px 5px; margin-left: 8px; vertical-align: middle; }
+  .ws-reason { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; font-style: normal; }
 
   /* Generation progress */
   .gen-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .gen-item { border: 1px solid rgba(180,130,50,0.15); border-radius: 3px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
-  .gen-item.done { border-color: var(--correct-border); background: rgba(80,160,80,0.06); }
-  .gen-item.active { border-color: rgba(180,130,50,0.4); }
-  .gen-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(180,130,50,0.3); flex-shrink: 0; }
+  .gen-item { border: 1px solid rgba(100,70,20,0.1); border-radius: 3px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+  .gen-item.done { border-color: var(--correct-border); background: rgba(34,120,34,0.04); }
+  .gen-item.active { border-color: rgba(100,70,20,0.3); }
+  .gen-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(100,70,20,0.2); flex-shrink: 0; }
   .gen-item.done .gen-dot { background: var(--correct-text); }
   .gen-item.active .gen-dot { background: var(--gold); animation: pulse 1s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .gen-word { font-family: 'Playfair Display', serif; font-size: 14px; color: var(--text-dim); }
+  .gen-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 14px; color: var(--text-dim); }
   .gen-item.done .gen-word { color: var(--correct-text); }
   .gen-item.active .gen-word { color: var(--gold); }
 
   /* Game – quiz card with illustration + question content */
   @keyframes imgFade { from{opacity:0} to{opacity:1} }
-  /* No background color — the card gradient shows through around contain-fitted images
-     instead of harsh black bars */
-  .illustration-area { width: 100%; overflow: hidden; }
-  .illustration-area img { width: 100%; height: auto; max-height: 28vh; object-fit: contain; display: block; animation: imgFade 0.8s ease; }
-  .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(180,130,50,0.1); display: flex; align-items: baseline; gap: 14px; }
-  .vocab-word { font-family: 'Playfair Display', serif; font-size: 34px; font-weight: 700; color: var(--gold); }
-  .word-pos { font-size: 12px; font-style: italic; color: rgba(184,144,42,0.55); }
-  .paragraph-text { font-size: 15px; line-height: 1.6; color: var(--text-dim); font-style: italic; }
-  .paragraph-text mark { background: rgba(212,168,67,0.17); color: #e8c96a; border-radius: 2px; padding: 1px 3px; font-style: italic; }
-  .question-text { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 16px; }
+  .illustration-area {
+    padding: 20px 24px 0; overflow: hidden;
+  }
+  .illustration-frame {
+    position: relative; width: 100%; aspect-ratio: 3/2; border-radius: 6px;
+    overflow: hidden; background: rgba(100,70,20,0.04);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06), 0 0 0 1px rgba(100,70,20,0.08);
+  }
+  .illustration-frame img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    animation: imgFade 0.8s ease;
+  }
+  .word-banner { padding: 18px 32px 14px; border-bottom: 1px solid rgba(100,70,20,0.06); display: flex; align-items: baseline; gap: 14px; }
+  .vocab-word { font-family: 'Source Serif 4', Georgia, serif; font-size: 34px; font-weight: 600; color: var(--gold); }
+  .word-pos { font-size: 12px; font-style: normal; color: rgba(100,70,20,0.45); }
+  .paragraph-text { font-size: 15px; line-height: 1.7; color: var(--text-dim); font-style: normal; }
+  .paragraph-text mark { background: rgba(120,80,20,0.1); color: #6b5218; border-radius: 2px; padding: 1px 3px; font-style: normal; }
+  .question-text { font-family: 'Source Serif 4', Georgia, serif; font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 16px; }
   .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .opt-btn {
-    background: rgba(255,255,255,0.025);
-    border: 1px solid rgba(180,130,50,0.16);
+    background: rgba(100,70,20,0.02);
+    border: 1px solid rgba(100,70,20,0.1);
     border-radius: 3px;
     padding: 12px 14px;
-    font-family: 'Lora', serif;
+    font-family: 'Source Serif 4', Georgia, serif;
     font-size: 13.5px;
     color: var(--text-dim);
     cursor: pointer;
@@ -878,55 +975,182 @@ const STYLES = `
     line-height: 1.45;
     transition: all 0.15s;
   }
-  .opt-btn:hover:not(:disabled) { background: rgba(180,130,50,0.09); border-color: rgba(180,130,50,0.38); color: var(--text); }
+  .opt-btn:hover:not(:disabled) { background: rgba(100,70,20,0.06); border-color: rgba(100,70,20,0.22); color: var(--text); }
   .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
-  .opt-btn.eliminated { opacity: 0.28; cursor: not-allowed; background: rgba(255,255,255,0.01); border-color: rgba(180,130,50,0.08); color: rgba(200,180,140,0.4); text-decoration: line-through; text-decoration-color: rgba(200,180,140,0.2); }
-  .opt-btn.blank-opt { font-family: "Playfair Display", serif; font-style: italic; font-size: 14.5px; }
+  .opt-btn.eliminated { opacity: 0.35; cursor: not-allowed; background: rgba(100,70,20,0.01); border-color: rgba(100,70,20,0.05); color: rgba(80,60,30,0.35); text-decoration: line-through; text-decoration-color: rgba(80,60,30,0.2); }
+  .opt-btn.blank-opt { font-family: 'Source Serif 4', Georgia, serif; font-style: normal; font-size: 16px; }
   .options-grid.blank-options { grid-template-columns: 1fr; }
   .blank-row { display: flex; gap: 24px; align-items: flex-start; }
   .blank-row .options-grid.blank-options { flex: 1 1 55%; min-width: 0; }
   .blank-feedback { flex: 1 1 45%; min-width: 0; display: flex; align-items: center; }
-  .blank-word { display: inline-block; background: rgba(180,130,50,0.12); border-bottom: 2px solid rgba(180,130,50,0.5); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
+  .blank-word { display: inline-block; background: rgba(100,70,20,0.06); border-bottom: 2px solid rgba(100,70,20,0.3); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
   .opt-btn:disabled:not(.correct):not(.wrong) { opacity: 0.5; cursor: default; }
-  .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(180,130,50,0.45); margin-bottom: 3px; font-style: normal; }
+  .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(100,70,20,0.35); margin-bottom: 3px; font-style: normal; }
   .feedback-slot { min-height: 120px; margin-top: 16px; }
   .blank-feedback .feedback-banner { margin-top: 0; }
   .feedback-banner { padding: 13px 16px; border-radius: 3px; font-size: 13.5px; line-height: 1.55; animation: fadeUp 0.3s ease; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
-  .feedback-banner.hint { background: rgba(180,130,30,0.1); border: 1px solid rgba(180,130,30,0.28); color: #d4b86a; }
+  .feedback-banner.hint { background: rgba(140,100,20,0.07); border: 1px solid rgba(140,100,20,0.2); color: #6b5218; }
   .feedback-banner.correct { background: var(--correct); border: 1px solid var(--correct-border); color: var(--correct-text); }
-  .fb-head { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-  .next-btn { margin-top: 22px; width: 100%; background: rgba(180,130,50,0.1); border: 1px solid rgba(180,130,50,0.32); border-radius: 3px; padding: 13px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; letter-spacing: 0.03em; transition: all 0.15s; }
-  .next-btn:hover { background: rgba(180,130,50,0.18); border-color: rgba(180,130,50,0.55); }
-  .primary-btn { background: rgba(180,130,50,0.15); border: 1px solid rgba(180,130,50,0.4); border-radius: 3px; padding: 12px 28px; font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
-  .primary-btn:hover { background: rgba(180,130,50,0.25); }
+  .fb-head { font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .next-btn { margin-top: 22px; width: 100%; background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.2); border-radius: 3px; padding: 13px; font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; color: var(--gold); cursor: pointer; letter-spacing: 0.03em; transition: all 0.15s; }
+  .next-btn:hover { background: rgba(100,70,20,0.12); border-color: rgba(100,70,20,0.35); }
+  .primary-btn { background: rgba(100,70,20,0.08); border: 1px solid rgba(100,70,20,0.25); border-radius: 3px; padding: 12px 28px; font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; font-weight: 600; color: var(--gold); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .primary-btn:hover { background: rgba(100,70,20,0.15); }
   .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .secondary-btn { background: transparent; border: 1px solid rgba(180,130,50,0.25); border-radius: 3px; padding: 8px 20px; font-family: 'Playfair Display', serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
-  .secondary-btn:hover { border-color: rgba(180,130,50,0.45); color: var(--gold); }
+  .secondary-btn { background: transparent; border: 1px solid rgba(100,70,20,0.15); border-radius: 3px; padding: 8px 20px; font-family: 'Source Serif 4', Georgia, serif; font-size: 13px; color: var(--gold-dim); cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+  .secondary-btn:hover { border-color: rgba(100,70,20,0.3); color: var(--gold); }
+
+  /* Exercise label bar — small, muted header so it doesn't compete with the definition */
+  .exercise-label-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 32px; border-bottom: 1px solid rgba(100,70,20,0.06);
+    font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: rgba(100,70,20,0.4);
+  }
+  .exercise-label-tag {
+    font-size: 10px; font-style: normal; letter-spacing: 0.08em;
+    text-transform: none; color: rgba(100,70,20,0.35);
+  }
+
+  /* Definition section — prominent callout */
+  .definition-section {
+    border-left: 3px solid var(--gold);
+    margin: 0 24px; padding: 18px 24px !important;
+    border-bottom: none !important;
+    background: rgba(100,70,20,0.02); border-radius: 0 3px 3px 0;
+  }
+
+  /* Spelling card */
+  .speak-btn {
+    background: rgba(100,70,20,0.06); border: 1px solid rgba(100,70,20,0.15); border-radius: 3px;
+    color: var(--gold-dim); cursor: pointer; padding: 6px 8px; display: flex; align-items: center;
+    justify-content: center; transition: all 0.15s; line-height: 1;
+  }
+  .speak-btn:hover { background: rgba(100,70,20,0.12); border-color: rgba(100,70,20,0.3); color: var(--gold); }
+  .spell-chars-wrap { position: relative; }
+  .spell-chars {
+    display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+    padding: 24px 0 12px; user-select: none;
+  }
+  .spell-char {
+    display: inline-flex; align-items: center; justify-content: center; flex-direction: column;
+    width: 32px; height: 42px; font-family: 'Source Serif 4', Georgia, serif; font-size: 22px; font-weight: 600;
+    border-radius: 3px; position: relative; transition: all 0.2s;
+  }
+  .spell-char.spell-ghost {
+    color: rgba(100,70,20,0.15); background: rgba(100,70,20,0.03);
+    border: 1px solid rgba(100,70,20,0.06);
+  }
+  .spell-char.spell-ghost.spell-active {
+    color: rgba(100,70,20,0.28); border-color: rgba(100,70,20,0.2);
+    background: rgba(100,70,20,0.05);
+  }
+  .spell-char.spell-active::after {
+    content: ''; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+    width: 14px; height: 2px; background: var(--gold); border-radius: 1px;
+    animation: cursorBlink 1s step-end infinite;
+  }
+  @keyframes cursorBlink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  .spell-char.spell-typed {
+    color: var(--gold); background: rgba(100,70,20,0.06);
+    border: 1px solid rgba(100,70,20,0.18);
+  }
+  .spell-char.spell-flash-wrong {
+    color: var(--wrong-text) !important; background: var(--wrong) !important;
+    border-color: var(--wrong-border) !important;
+    animation: spellShake 0.35s ease;
+  }
+  @keyframes spellShake {
+    0%,100%{transform:translateX(0)} 20%{transform:translateX(-3px)} 40%{transform:translateX(3px)} 60%{transform:translateX(-2px)} 80%{transform:translateX(2px)}
+  }
+  .spell-char.spell-blank {
+    color: rgba(100,70,20,0.12); background: transparent;
+    border-bottom: 2px solid rgba(100,70,20,0.18); border-radius: 0;
+  }
+  .spell-char.spell-blank.spell-active {
+    border-bottom-color: var(--gold);
+  }
+  .spell-char.spell-blank.spell-filled {
+    color: var(--text); border-bottom-color: rgba(100,70,20,0.3);
+  }
+  .spell-char.spell-review-ok {
+    color: var(--correct-text); background: var(--correct);
+    border: 1px solid var(--correct-border);
+  }
+  .spell-char.spell-review-wrong {
+    color: var(--wrong-text); background: var(--wrong);
+    border: 1px solid var(--wrong-border);
+  }
+  .spell-correct-hint {
+    position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
+    font-size: 13px; color: var(--correct-text); font-weight: 600;
+  }
+  .spell-hidden-input {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0; font-size: 16px; cursor: default; z-index: 1;
+  }
+
+  /* Game progress bar — inline, with phase labels and step counter */
+  .game-progress-bar {
+    width: 100%; max-width: 660px; margin-bottom: 16px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .gp-phases {
+    display: flex; justify-content: center; gap: 20px;
+  }
+  .gp-phase {
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: rgba(100,70,20,0.25); transition: color 0.3s;
+  }
+  .gp-phase.gp-active {
+    color: var(--gold); font-weight: 600;
+  }
+  .gp-track {
+    width: 100%; height: 6px; border-radius: 3px;
+    background: rgba(100,70,20,0.08); overflow: hidden;
+  }
+  .gp-fill {
+    height: 100%; background: var(--gold); border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .gp-bottom-row {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .gp-count {
+    font-size: 11px; color: rgba(100,70,20,0.4);
+    letter-spacing: 0.04em;
+  }
+  .gp-mute-btn {
+    background: none; border: none; cursor: pointer; padding: 2px;
+    color: rgba(100,70,20,0.3); display: flex; align-items: center;
+    transition: color 0.15s;
+  }
+  .gp-mute-btn:hover { color: rgba(100,70,20,0.6); }
 
   /* Score strip */
   .score-strip { display: flex; justify-content: center; gap: 7px; margin-bottom: 20px; flex-wrap: wrap; }
-  .score-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(180,130,50,0.28); background: transparent; transition: all 0.3s; }
-  .score-dot.current { border-color: rgba(180,130,50,0.7); background: rgba(180,130,50,0.3); }
-  .score-dot.correct { background: rgba(80,160,80,0.7); border-color: var(--correct-border); }
-  .score-dot.retry { background: rgba(200,160,40,0.7); border-color: rgba(220,180,60,0.55); }
-  .score-dot.retest { background: rgba(100,160,220,0.7); border-color: rgba(120,180,240,0.55); }
+  .score-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(100,70,20,0.2); background: transparent; transition: all 0.3s; }
+  .score-dot.current { border-color: rgba(100,70,20,0.5); background: rgba(100,70,20,0.2); }
+  .score-dot.correct { background: rgba(34,120,34,0.6); border-color: var(--correct-border); }
+  .score-dot.retry { background: rgba(180,140,30,0.6); border-color: rgba(180,140,30,0.45); }
+  .score-dot.retest { background: rgba(60,120,200,0.6); border-color: rgba(60,120,200,0.45); }
 
   /* Results */
   .results-word-card {
     display: flex; align-items: center; justify-content: space-between;
     border-radius: 3px; padding: 10px 16px; margin-bottom: 8px;
   }
-  .rwc-word { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 17px; }
+  .rwc-word { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; font-size: 17px; }
   .rwc-label { font-size: 12px; opacity: 0.8; letter-spacing: 0.04em; }
 
-  .spinner { width: 32px; height: 32px; border: 2px solid rgba(180,130,50,0.15); border-top-color: rgba(180,130,50,0.7); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  .spinner { width: 32px; height: 32px; border: 2px solid rgba(100,70,20,0.1); border-top-color: rgba(100,70,20,0.5); border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to{transform:rotate(360deg)} }
-  .mini-spinner { width: 14px; height: 14px; border: 1.5px solid rgba(180,130,50,0.15); border-top-color: rgba(180,130,50,0.6); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  .mini-spinner { width: 14px; height: 14px; border: 1.5px solid rgba(100,70,20,0.1); border-top-color: rgba(100,70,20,0.45); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
   /* ── Tablet responsive ──────────────────────────────────────────────────── */
 
-  /* Touch targets: raise all interactive elements to ≥44px on touch screens */
+  /* Touch targets: raise all interactive elements to >=44px on touch screens */
   @media (pointer: coarse) {
     .chapter-btn { padding: 14px 16px; min-height: 44px; }
     .opt-btn { padding: 14px 14px; min-height: 44px; }
@@ -939,13 +1163,13 @@ const STYLES = `
     .ws-check { width: 24px; height: 24px; font-size: 15px; }
   }
 
-  /* Small tablets and up (≥600px): expand card and breathing room */
+  /* Small tablets and up (>=600px): expand card and breathing room */
   @media (min-width: 600px) {
     .card { max-width: 720px; }
     .app { padding: 40px 24px 80px; }
   }
 
-  /* Portrait tablet and up (≥768px): larger layout, more readable type */
+  /* Portrait tablet and up (>=768px): larger layout, more readable type */
   @media (min-width: 768px) {
     .card { max-width: 800px; }
     .app { padding: 48px 32px 80px; }
@@ -954,7 +1178,7 @@ const STYLES = `
     .word-banner { padding: 20px 40px 16px; }
     .chapter-list { max-height: 560px; }
     .opt-btn { font-size: 14.5px; line-height: 1.5; }
-    .opt-btn.blank-opt { font-size: 15.5px; }
+    .opt-btn.blank-opt { font-size: 17px; }
     .vocab-word { font-size: 38px; }
     .question-text { font-size: 18px; }
     .paragraph-text { font-size: 16px; }
@@ -966,7 +1190,7 @@ const STYLES = `
     .ws-reason { font-size: 13.5px; }
   }
 
-  /* Landscape tablet and up (≥1024px): make use of the wider viewport */
+  /* Landscape tablet and up (>=1024px): make use of the wider viewport */
   @media (min-width: 1024px) {
     .card { max-width: 860px; }
     .app { padding: 56px 40px 80px; }
@@ -975,15 +1199,12 @@ const STYLES = `
     .app-title h1 { font-size: 32px; }
   }
 
-  /* .game-active is added to .app only during the question phase.
-     The card uses a 2-row equal grid so the illustration and question content
-     are the same height and vertically centered in the viewport.
-     Portrait: image on top, content below (grid rows).
-     Landscape: image on left, content on right (grid columns). */
+  /* .game-active is added to .app only during the question phase. */
   .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: center; }
   .app.game-active > .card { display: grid; grid-template-rows: 1fr 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
-  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 5%; }
-  .app.game-active .illustration-area img { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .app.game-active .illustration-frame { aspect-ratio: auto; width: 100%; height: 100%; }
+  .app.game-active .illustration-frame img { object-fit: contain; }
   .app.game-active .game-content { min-height: 0; overflow-y: auto; }
   .app.game-active .card-section { padding-top: 14px; padding-bottom: 14px; }
   .app.game-active .card-section:last-child { padding-bottom: 20px; }
@@ -1000,7 +1221,7 @@ const STYLES = `
   }
   @media (orientation: landscape) {
     .app.game-active > .card:has(.illustration-area) { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
-    .app.game-active .illustration-area img { height: 100%; width: 100%; }
+    .app.game-active .illustration-frame img { height: 100%; width: 100%; }
     .app.game-active .game-content { display: flex; flex-direction: column; }
   }
 `;
@@ -1170,7 +1391,7 @@ function ChapterPhase({ chapters, bookTitle, storyBible, onSelect }) {
         <div className="section-label">Choose a chapter — {bookTitle}</div>
 
         {storyBible && (
-          <div style={{marginBottom:16,padding:"10px 14px",background:"rgba(180,130,50,0.07)",border:"1px solid rgba(180,130,50,0.2)",borderRadius:3,display:"flex",alignItems:"center",gap:10}}>
+          <div style={{marginBottom:16,padding:"10px 14px",background:"rgba(100,70,20,0.04)",border:"1px solid rgba(100,70,20,0.12)",borderRadius:3,display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:14}}>✦</span>
             <div style={{fontSize:12,color:"var(--text-dim)"}}>
               <span style={{color:"var(--gold)"}}>Story Bible active</span>
@@ -1310,7 +1531,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
   if (loading) return (
     <div className="card"><div className="card-body" style={{textAlign:"center",padding:"48px"}}>
       <div className="spinner" style={{margin:"0 auto 16px"}}/>
-      <p style={{fontStyle:"italic",color:"var(--text-dim)"}}>Finding valuable vocabulary words…</p>
+      <p style={{fontStyle:"normal",color:"var(--text-dim)"}}>Finding valuable vocabulary words…</p>
     </div></div>
   );
 
@@ -1329,9 +1550,9 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
           <div className="section-label" style={{marginBottom:0}}>{chapter.title} — {bookTitle}</div>
           {fromCache && (
             <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:11,color:"rgba(184,144,42,0.45)",fontStyle:"italic"}}>from cache</span>
+              <span style={{fontSize:11,color:"rgba(100,70,20,0.38)",fontStyle:"normal"}}>from cache</span>
               <button onClick={handleRefresh}
-                style={{background:"none",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,
+                style={{background:"none",border:"1px solid rgba(100,70,20,0.15)",borderRadius:3,
                   padding:"2px 10px",fontSize:11,color:"var(--gold-dim)",cursor:"pointer",fontFamily:"'Lora',serif"}}>
                 ↺ Refresh
               </button>
@@ -1363,12 +1584,12 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
           ))}
         </div>
         {exportJson && !geminiAvailable && (
-          <div style={{marginTop:16,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(180,130,50,0.25)",borderRadius:3,padding:16}}>
+          <div style={{marginTop:16,background:"rgba(100,70,20,0.03)",border:"1px solid rgba(100,70,20,0.15)",borderRadius:3,padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-              <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)"}}>
+              <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",color:"rgba(100,70,20,0.4)"}}>
                 words.json for offline image generation — click text to select all
               </div>
-              <span style={{fontSize:11,color:"rgba(184,144,42,0.45)",fontStyle:"italic"}}>
+              <span style={{fontSize:11,color:"rgba(100,70,20,0.38)",fontStyle:"normal"}}>
                 click text below to select all
               </span>
             </div>
@@ -1389,23 +1610,23 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
         )}
         {/* Tarball upload — only shown when Gemini is not directly accessible */}
         {!geminiAvailable && (
-        <div style={{marginTop:16,padding:"12px 14px",background:"rgba(180,130,50,0.05)",
-          border:"1px solid rgba(180,130,50,0.15)",borderRadius:3}}>
+        <div style={{marginTop:16,padding:"12px 14px",background:"rgba(100,70,20,0.03)",
+          border:"1px solid rgba(100,70,20,0.1)",borderRadius:3}}>
           <div style={{fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",
-            color:"rgba(184,144,42,0.5)",marginBottom:8}}>Optional — upload images before generating</div>
+            color:"rgba(100,70,20,0.4)",marginBottom:8}}>Optional — upload images before generating</div>
           <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <input ref={tarballInputRef} type="file" accept="application/gzip,application/x-gzip,application/x-tar,.gz,.tgz,*/*"
               style={{display:"none"}}
               onChange={e => handleTarballUpload(e.target.files[0])}/>
             <button
               onClick={() => tarballInputRef.current?.click()}
-              style={{background:"none",border:"1px solid rgba(180,130,50,0.3)",borderRadius:3,
+              style={{background:"none",border:"1px solid rgba(100,70,20,0.18)",borderRadius:3,
                 padding:"7px 14px",fontFamily:"'Lora',serif",fontSize:13,
                 color:"var(--gold-dim)",cursor:"pointer"}}>
               ↑ Upload vocab-images.tar.gz
             </button>
             {tarballStatus === "loading" && (
-              <span style={{fontSize:12,color:"var(--text-dim)",fontStyle:"italic",display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:12,color:"var(--text-dim)",fontStyle:"normal",display:"flex",alignItems:"center",gap:6}}>
                 <div className="mini-spinner"/>Loading images…
               </span>
             )}
@@ -1426,7 +1647,7 @@ function SuggestPhase({ chapter, bookTitle, bible, onConfirm }) {
             <select
               value={geminiModel}
               onChange={e => { setGeminiModel(e.target.value); localStorage.setItem(GEMINI_MODEL_KEY, e.target.value); }}
-              style={{fontSize:12,padding:"6px 8px",background:"var(--card-bg)",color:"var(--text-dim)",border:"1px solid rgba(180,130,50,0.3)",borderRadius:3}}
+              style={{fontSize:12,padding:"6px 8px",background:"var(--card-bg)",color:"var(--text-dim)",border:"1px solid rgba(100,70,20,0.18)",borderRadius:3}}
             >
               {GEMINI_IMAGE_MODELS.map(m => (
                 <option key={m.id} value={m.id}>{m.label}</option>
@@ -1474,11 +1695,11 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
     <div className="card">
       <div className="card-body">
         <div className="section-label">Story Bible</div>
-        <p style={{fontSize:13,color:"var(--text-dim)",marginBottom:20,lineHeight:1.6,fontStyle:"italic"}}>
+        <p style={{fontSize:13,color:"var(--text-dim)",marginBottom:20,lineHeight:1.6,fontStyle:"normal"}}>
           Building character & setting descriptions to keep illustrations consistent across the whole book.
         </p>
 
-        <div style={{display:"flex",alignItems:"flex-start",gap:14,padding:"16px",background:"rgba(180,130,50,0.06)",border:"1px solid rgba(180,130,50,0.18)",borderRadius:3}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14,padding:"16px",background:"rgba(100,70,20,0.04)",border:"1px solid rgba(100,70,20,0.1)",borderRadius:3}}>
           <div style={{fontSize:20,marginTop:1}}>{stepIcon[status.step] || "…"}</div>
           <div>
             <div style={{fontSize:14,color:"var(--text)",marginBottom:4}}>{status.message}</div>
@@ -1502,9 +1723,9 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
               <div style={{marginBottom:12}}>
                 <div className="section-label" style={{marginBottom:8}}>Characters</div>
                 {bible.characters.map(c => (
-                  <div key={c.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(180,130,50,0.1)",borderRadius:3}}>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{c.name}</div>
-                    <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"italic"}}>{c.promptFragment}</div>
+                  <div key={c.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(100,70,20,0.02)",border:"1px solid rgba(100,70,20,0.06)",borderRadius:3}}>
+                    <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{c.name}</div>
+                    <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"normal"}}>{c.promptFragment}</div>
                   </div>
                 ))}
               </div>
@@ -1513,9 +1734,9 @@ function StoryBiblePhase({ fullText, bookTitle, onReady }) {
               <div>
                 <div className="section-label" style={{marginBottom:8}}>Settings</div>
                 {bible.settings.map(s => (
-                  <div key={s.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(180,130,50,0.1)",borderRadius:3}}>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{s.name}</div>
-                    <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"italic"}}>{s.promptFragment}</div>
+                  <div key={s.name} style={{marginBottom:8,padding:"10px 14px",background:"rgba(100,70,20,0.02)",border:"1px solid rgba(100,70,20,0.06)",borderRadius:3}}>
+                    <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:14,color:"var(--gold)",marginBottom:3}}>{s.name}</div>
+                    <div style={{fontSize:12,color:"var(--text-dim)",lineHeight:1.5,fontStyle:"normal"}}>{s.promptFragment}</div>
                   </div>
                 ))}
               </div>
@@ -1731,7 +1952,7 @@ function GeneratingPhase({ words, bookTitle, bible, tarballImages, geminiModel, 
                           ↑ Upload images.tar.gz
                         </button>
                         <button onClick={() => onReady(assetsReady)}
-                          style={{background:"none",border:"none",fontSize:13,color:"rgba(184,144,42,0.5)",
+                          style={{background:"none",border:"none",fontSize:13,color:"rgba(100,70,20,0.4)",
                             cursor:"pointer",textDecoration:"underline"}}>
                           Skip — play without images
                         </button>
@@ -1778,6 +1999,7 @@ function BlankCard({ asset, onCorrect }) {
 
   function handlePick(i) {
     if (blankOptions[i].isCorrect) {
+      correctSound.play();
       const picks = wrongPicks.length; // capture before state update
       setPhase("correct");
       setTimeout(() => onCorrect(picks), 1400);
@@ -1789,13 +2011,12 @@ function BlankCard({ asset, onCorrect }) {
 
   return (
     <div className="card">
-      <div className="word-banner">
-        <span className="vocab-word" style={{fontSize:22}}>Fill in the blank</span>
-        <span style={{fontSize:12,fontStyle:"italic",color:"rgba(184,144,42,0.55)"}}>review</span>
+      <div className="exercise-label-bar">
+        <span>Fill in the blank</span>
+        <span className="exercise-label-tag">review</span>
       </div>
-      <div className="card-section">
-        <div className="section-label">Definition</div>
-        <div style={{fontSize:15,lineHeight:1.7,fontStyle:"italic",color:"var(--gold-dim)"}}>
+      <div className="card-section definition-section">
+        <div style={{fontSize:17,lineHeight:1.7,color:"var(--text)"}}>
           {asset.options.options[asset.options.correct]}
         </div>
       </div>
@@ -1846,6 +2067,219 @@ function BlankCard({ asset, onCorrect }) {
   );
 }
 
+// ── Spelling practice card ────────────────────────────────────────────────────
+function SpellCard({ asset, onCorrect }) {
+  const word = asset.word;
+  const lower = word.toLowerCase();
+  const [stage, setStage] = useState("trace"); // trace | recall | review
+  const [pos, setPos] = useState(0);           // current char index (trace/review)
+  const [recallChars, setRecallChars] = useState([]);
+  const [recallMistakes, setRecallMistakes] = useState(0);
+  const recallMistakesRef = useRef(0);
+  const [flash, setFlash] = useState(-1);      // index of wrong-char flash
+  const inputRef = useRef(null);
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+
+  const focusInput = useCallback(() => {
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.value = "";
+        inputRef.current.focus();
+      }
+    }, 80);
+  }, []);
+
+  useEffect(focusInput, [stage, focusInput]);
+
+  function speak(e) {
+    if (e) e.stopPropagation();
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(word);
+    u.rate = 0.82;
+    speechSynthesis.speak(u);
+  }
+
+  // Process a single typed character
+  function processChar(ch) {
+    const s = stageRef.current;
+    if (s === "trace" || s === "review") {
+      if (ch === lower[pos]) {
+        const next = pos + 1;
+        setPos(next);
+        if (next >= lower.length) {
+          if (s === "trace") {
+            setTimeout(() => {
+              setStage("recall");
+              setPos(0);
+              setRecallChars([]);
+            }, 800);
+          } else {
+            // review retype complete → report score
+            correctSound.play();
+            const m = recallMistakesRef.current;
+            setTimeout(() => onCorrect(m), 1000);
+          }
+        }
+      } else {
+        // Wrong character — flash it
+        setFlash(pos);
+        setTimeout(() => setFlash(-1), 400);
+      }
+    } else if (s === "recall") {
+      const newChars = [...recallChars, ch];
+      setRecallChars(newChars);
+      if (newChars.length >= lower.length) {
+        let mistakes = 0;
+        for (let i = 0; i < lower.length; i++) {
+          if (newChars[i] !== lower[i]) mistakes++;
+        }
+        setRecallMistakes(mistakes);
+        recallMistakesRef.current = mistakes;
+        if (mistakes === 0) {
+          // Perfect — brief pause then advance
+          correctSound.play();
+          setTimeout(() => onCorrect(0), 1200);
+        } else {
+          // Show review inline — user can immediately start retyping
+          setTimeout(() => { setStage("review"); setPos(0); }, 500);
+        }
+      }
+    }
+  }
+
+  function handleInput(e) {
+    const val = e.target.value || "";
+    if (val.length > 0) {
+      const ch = val.slice(-1).toLowerCase();
+      e.target.value = "";
+      processChar(ch);
+    }
+  }
+
+  function handleKeyDown(e) {
+    // Allow backspace during recall before submission
+    if (e.key === "Backspace" && stageRef.current === "recall" && recallChars.length > 0) {
+      e.preventDefault();
+      setRecallChars(prev => prev.slice(0, -1));
+    }
+  }
+
+  // Render the character boxes
+  function renderChars() {
+    const chars = word.split("");
+
+    if (stage === "trace") {
+      return chars.map((ch, i) => {
+        let cls = "spell-char";
+        if (i < pos) cls += " spell-typed";
+        else if (i === pos) cls += " spell-ghost spell-active";
+        else cls += " spell-ghost";
+        if (i === flash) cls += " spell-flash-wrong";
+        return <span key={i} className={cls}>{ch}</span>;
+      });
+    }
+
+    if (stage === "recall") {
+      return chars.map((ch, i) => {
+        let cls = "spell-char spell-blank";
+        if (i < recallChars.length) cls += " spell-filled";
+        else if (i === recallChars.length) cls += " spell-active";
+        return (
+          <span key={i} className={cls}>
+            {i < recallChars.length ? recallChars[i] : "\u00A0"}
+          </span>
+        );
+      });
+    }
+
+    // Review: positions < pos are retyped (gold), positions >= pos show recall results
+    if (stage === "review") {
+      return chars.map((ch, i) => {
+        if (i < pos) {
+          // Already retyped correctly
+          return <span key={i} className="spell-char spell-typed">{ch}</span>;
+        }
+        // Show recall result with cursor on current position
+        const typed = recallChars[i] || "";
+        const ok = typed.toLowerCase() === ch.toLowerCase();
+        let cls = `spell-char ${ok ? "spell-review-ok" : "spell-review-wrong"}`;
+        if (i === pos) cls += " spell-active";
+        if (i === flash) cls += " spell-flash-wrong";
+        return (
+          <span key={i} className={cls}>
+            {typed}
+            {!ok && <span className="spell-correct-hint">{ch}</span>}
+          </span>
+        );
+      });
+    }
+    return null;
+  }
+
+  const definition = asset.options.options[asset.options.correct];
+  const stageLabels = {
+    trace: "Type each letter as you see it",
+    recall: "Now spell it from memory",
+    review: "Type each correction to continue",
+  };
+
+  return (
+    <div className="card" onClick={focusInput}>
+      <div className="exercise-label-bar">
+        <span>Spell the word</span>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span className="exercise-label-tag">practice</span>
+          <button className="speak-btn" onClick={speak} title="Hear pronunciation" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="card-section definition-section">
+        <div style={{fontSize:17,lineHeight:1.7,color:"var(--text)"}}>
+          {definition}
+        </div>
+      </div>
+
+      <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
+        <div className="section-label">{stageLabels[stage]}</div>
+
+        <div className="spell-chars-wrap">
+          <div className="spell-chars">
+            {renderChars()}
+          </div>
+          {/* Hidden input overlays the chars area so tapping it opens the keyboard */}
+          <input
+            ref={inputRef}
+            className="spell-hidden-input"
+            onInput={handleInput}
+            onKeyDown={handleKeyDown}
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-label="Type spelling"
+            enterKeyHint="next"
+          />
+        </div>
+
+        {/* Perfect recall gets a brief success banner (no retyping needed) */}
+        {stage === "recall" && recallChars.length >= lower.length && recallMistakes === 0 && (
+          <div className="feedback-banner correct" style={{marginTop:20}}>
+            <div className="fb-head">Perfect spelling! ✦</div>
+            You spelled <strong>{word}</strong> flawlessly.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Phase: GAME ───────────────────────────────────────────────────────────────
 function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   // Build blank options for each asset upfront (correct word + 3 word distractors)
@@ -1862,19 +2296,21 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
     return { ...a, blankOptions: blankArr };
   });
 
-  // Queue: first pass (word→meaning) then fill-in-the-blank for ALL words
+  // Queue: meaning → fill-in-the-blank → spelling for ALL words
   const initialQueue = [
-    ...assetsWithBlanks.map(a => ({ ...a, isRetest: false })),
-    ...assetsWithBlanks.map(a => ({ ...a, isRetest: true })),
+    ...assetsWithBlanks.map(a => ({ ...a, roundType: "meaning" })),
+    ...assetsWithBlanks.map(a => ({ ...a, roundType: "blank" })),
+    ...assetsWithBlanks.map(a => ({ ...a, roundType: "spell" })),
   ];
   const [queue] = useState(initialQueue);
   const [queuePos, setQueuePos] = useState(0);
-  // Track scores separately for each round: { word: { meaning: score, blank: score } }
+  // Track scores separately for each round
   const [scores, setScores] = useState(
-    () => Object.fromEntries(assetsWithBlanks.map(a => [a.word, { meaning: null, blank: null }]))
+    () => Object.fromEntries(assetsWithBlanks.map(a => [a.word, { meaning: null, blank: null, spelling: null }]))
   );
   const [phase, setPhase] = useState("quiz");
   const [wrongPicks, setWrongPicks] = useState([]);
+  const [soundMuted, setSoundMuted] = useState(correctSound.muted);
 
   const current = queue[queuePos];
 
@@ -1883,9 +2319,18 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
     setWrongPicks([]);
   }, [queuePos]);
 
+  function advance(newScores) {
+    if (queuePos >= queue.length - 1) {
+      onDone(newScores);
+    } else {
+      setQueuePos(pos => pos + 1);
+    }
+  }
+
   function handleSelect(i) {
     const isCorrect = i === current.options.correct;
     if (isCorrect) {
+      correctSound.play();
       const newScore = wrongPicks.length === 0 ? "correct" : "retry";
       setScores(s => ({ ...s, [current.word]: { ...s[current.word], meaning: newScore } }));
       setPhase("correct");
@@ -1896,36 +2341,75 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   }
 
   function handleNextAfterCorrect() {
-    if (queuePos >= queue.length - 1) {
-      onDone(scores);
-    } else {
-      setQueuePos(pos => pos + 1);
-    }
+    advance(scores);
   }
 
-  function handleRetestCorrect(numWrong) {
+  function handleBlankCorrect(numWrong) {
     const blankScore = numWrong === 0 ? "correct" : "retry";
     const newScores = { ...scores, [current.word]: { ...scores[current.word], blank: blankScore } };
     setScores(newScores);
-    if (queuePos >= queue.length - 1) {
-      onDone(newScores);
-    } else {
-      setQueuePos(pos => pos + 1);
-    }
+    advance(newScores);
   }
 
-  const inBlankRound = current.isRetest;
+  function handleSpellCorrect(numMistakes) {
+    const spellScore = numMistakes === 0 ? "correct" : "retry";
+    const newScores = { ...scores, [current.word]: { ...scores[current.word], spelling: spellScore } };
+    setScores(newScores);
+    advance(newScores);
+  }
+
+  const totalExercises = queue.length;
+  const progressPct = (queuePos / totalExercises) * 100;
+
+  const roundType = current.roundType;
   const dotScores = assets.map(a => {
     const s = scores[a.word];
-    const meaningScore = s?.meaning;
-    if (!meaningScore && a.word === current.word && !current.isRetest) return "current";
-    return meaningScore || "";
+    const scoreKey = roundType === "blank" ? "blank" : roundType === "spell" ? "spelling" : "meaning";
+    const score = s?.[scoreKey];
+    if (!score && a.word === current.word) return "current";
+    return score || "";
   });
+
+  const phases = [
+    { key: "meaning", label: "Meaning" },
+    { key: "blank",   label: "Fill in blank" },
+    { key: "spell",   label: "Spelling" },
+  ];
 
   return (
     <>
-      <div style={{textAlign:"center",marginBottom:10,fontSize:11,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(180,130,50,0.45)"}}>
-        {inBlankRound ? "◆ Fill in the Blank" : "◆ What does this word mean?"}
+      <div className="game-progress-bar">
+        <div className="gp-phases">
+          {phases.map(p => (
+            <span key={p.key} className={`gp-phase${p.key === roundType ? " gp-active" : ""}`}>
+              {p.label}
+            </span>
+          ))}
+        </div>
+        <div className="gp-track">
+          <div className="gp-fill" style={{width:`${progressPct}%`}}/>
+        </div>
+        <div className="gp-bottom-row">
+          <div className="gp-count">{queuePos + 1} of {totalExercises}</div>
+          <button
+            className="gp-mute-btn"
+            onClick={() => setSoundMuted(correctSound.toggle())}
+            title={soundMuted ? "Unmute sounds" : "Mute sounds"}
+            type="button"
+          >
+            {soundMuted ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
       <div className="score-strip">
         {dotScores.map((s, i) => (
@@ -1933,18 +2417,26 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
         ))}
       </div>
 
-      {current.isRetest ? (
+      {roundType === "blank" ? (
         <BlankCard
           key={current.word}
           asset={current}
-          onCorrect={handleRetestCorrect}
+          onCorrect={handleBlankCorrect}
+        />
+      ) : roundType === "spell" ? (
+        <SpellCard
+          key={current.word}
+          asset={current}
+          onCorrect={handleSpellCorrect}
         />
       ) : (
         <div className="card">
 
           {current.image && (
             <div className="illustration-area">
-              <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
+              <div className="illustration-frame">
+                <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
+              </div>
             </div>
           )}
           {/* Word + paragraph merged into one section (no separate banner / "From the text" label)
@@ -2009,20 +2501,22 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
 // ── Phase: RESULTS ────────────────────────────────────────────────────────────
 function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPlayAgain }) {
   const scoreConfig = {
-    correct: { bg:"rgba(80,160,80,0.12)",  border:"rgba(100,200,100,0.35)", color:"var(--correct-text)", icon:"✦", label:"first try" },
-    retry:   { bg:"rgba(200,160,40,0.1)",  border:"rgba(220,180,60,0.35)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
-    wrong:   { bg:"rgba(180,60,60,0.1)",   border:"rgba(200,80,80,0.3)",   color:"var(--wrong-text)",   icon:"✗", label:"missed" },
+    correct: { bg:"rgba(34,120,34,0.07)",  border:"rgba(34,120,34,0.25)", color:"var(--correct-text)", icon:"✦", label:"first try" },
+    retry:   { bg:"rgba(140,100,20,0.07)", border:"rgba(140,100,20,0.25)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
+    wrong:   { bg:"rgba(190,50,50,0.06)",  border:"rgba(190,50,50,0.2)",   color:"var(--wrong-text)",   icon:"✗", label:"missed" },
   };
 
   const total = assets.length;
-  const meaningPerfect = assets.filter(a => scores[a.word]?.meaning === "correct").length;
-  const blankPerfect   = assets.filter(a => scores[a.word]?.blank   === "correct").length;
-  const allPerfect = meaningPerfect === total && blankPerfect === total;
+  const meaningPerfect  = assets.filter(a => scores[a.word]?.meaning  === "correct").length;
+  const blankPerfect    = assets.filter(a => scores[a.word]?.blank    === "correct").length;
+  const spellingPerfect = assets.filter(a => scores[a.word]?.spelling === "correct").length;
+  const allPerfect = meaningPerfect === total && blankPerfect === total && spellingPerfect === total;
 
   useEffect(() => {
     const wordResults = assets.flatMap(a => [
-      { word: a.word, taskType: "meaning",    firstTry: scores[a.word]?.meaning === "correct", attempts: scores[a.word]?.meaning ? 1 : 0 },
-      { word: a.word, taskType: "fill-blank", firstTry: scores[a.word]?.blank   === "correct", attempts: scores[a.word]?.blank   ? 1 : 0 },
+      { word: a.word, taskType: "meaning",    firstTry: scores[a.word]?.meaning  === "correct", attempts: scores[a.word]?.meaning  ? 1 : 0 },
+      { word: a.word, taskType: "fill-blank", firstTry: scores[a.word]?.blank    === "correct", attempts: scores[a.word]?.blank    ? 1 : 0 },
+      { word: a.word, taskType: "spelling",   firstTry: scores[a.word]?.spelling === "correct", attempts: scores[a.word]?.spelling ? 1 : 0 },
     ]);
     recordSession({
       gameType: "vocab-quest",
@@ -2031,31 +2525,36 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const colStyle = {fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(100,70,20,0.4)",textAlign:"left",paddingLeft:16};
+
   return (
     <div className="card">
       <div className="card-body" style={{textAlign:"center"}}>
-        <div style={{fontFamily:"'Playfair Display',serif",fontSize:52,color:"var(--gold)",marginBottom:10}}>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:52,color:"var(--gold)",marginBottom:10}}>
           {allPerfect ? "✦" : "◆"}
         </div>
-        <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:700,color:"var(--text)",marginBottom:6}}>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:24,fontWeight:600,color:"var(--text)",marginBottom:6}}>
           {allPerfect ? "Perfect score, Scholar!" : "Well done!"}
         </div>
-        <div style={{fontSize:13,color:"var(--gold-dim)",marginBottom:24,fontStyle:"italic"}}>{chapterTitle} · {bookTitle}</div>
+        <div style={{fontSize:13,color:"var(--gold-dim)",marginBottom:24,fontStyle:"normal"}}>{chapterTitle} · {bookTitle}</div>
 
-        {/* Two-column header */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,margin:"0 auto 6px",maxWidth:560}}>
-          <div style={{fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)",textAlign:"left",paddingLeft:16}}>Word → Meaning</div>
-          <div style={{fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(184,144,42,0.5)",textAlign:"left",paddingLeft:16}}>Fill in the Blank</div>
+        {/* Three-column header */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,margin:"0 auto 6px",maxWidth:780}}>
+          <div style={colStyle}>Word → Meaning</div>
+          <div style={colStyle}>Fill in the Blank</div>
+          <div style={colStyle}>Spelling</div>
         </div>
 
-        <div style={{display:"flex",flexDirection:"column",gap:6,margin:"0 auto 24px",maxWidth:560}}>
+        <div style={{display:"flex",flexDirection:"column",gap:6,margin:"0 auto 24px",maxWidth:780}}>
           {assets.map(a => {
-            const ms = scores[a.word]?.meaning || "wrong";
-            const bs = scores[a.word]?.blank   || "wrong";
+            const ms = scores[a.word]?.meaning  || "wrong";
+            const bs = scores[a.word]?.blank    || "wrong";
+            const ss = scores[a.word]?.spelling || "wrong";
             const mc = scoreConfig[ms] || scoreConfig.wrong;
             const bc = scoreConfig[bs] || scoreConfig.wrong;
+            const sc = scoreConfig[ss] || scoreConfig.wrong;
             return (
-              <div key={a.word} style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <div key={a.word} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
                 <div className="results-word-card" style={{background:mc.bg,border:`1px solid ${mc.border}`,flexDirection:"column",alignItems:"flex-start",gap:2}}>
                   <span className="rwc-word" style={{color:mc.color,fontSize:15}}>{a.word}</span>
                   <span className="rwc-label" style={{color:mc.color,fontSize:11}}>{mc.icon} {mc.label}</span>
@@ -2063,6 +2562,10 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
                 <div className="results-word-card" style={{background:bc.bg,border:`1px solid ${bc.border}`,flexDirection:"column",alignItems:"flex-start",gap:2}}>
                   <span className="rwc-word" style={{color:bc.color,fontSize:15}}>{a.word}</span>
                   <span className="rwc-label" style={{color:bc.color,fontSize:11}}>{bc.icon} {bc.label}</span>
+                </div>
+                <div className="results-word-card" style={{background:sc.bg,border:`1px solid ${sc.border}`,flexDirection:"column",alignItems:"flex-start",gap:2}}>
+                  <span className="rwc-word" style={{color:sc.color,fontSize:15}}>{a.word}</span>
+                  <span className="rwc-label" style={{color:sc.color,fontSize:11}}>{sc.icon} {sc.label}</span>
                 </div>
               </div>
             );
