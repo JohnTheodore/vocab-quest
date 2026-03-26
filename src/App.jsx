@@ -28,43 +28,63 @@ const correctSound = (() => {
     return ctx;
   }
 
-  // Three short chime variations — triangle waves, ~250ms, gentle volume
+  // Marimba-like tone: sine fundamental + quiet 2nd harmonic, bright attack, reverb tail
+  function chimeNote(ac, freq, start, vol) {
+    // Fundamental (sine)
+    const osc1 = ac.createOscillator();
+    const g1 = ac.createGain();
+    osc1.type = "sine";
+    osc1.frequency.value = freq;
+    // Bright attack: instant peak then fast initial drop, then slow reverb tail
+    g1.gain.setValueAtTime(vol, start);
+    g1.gain.setTargetAtTime(vol * 0.35, start + 0.015, 0.04); // fast drop to 35%
+    g1.gain.setTargetAtTime(0.001, start + 0.06, 0.12);        // slow reverb tail
+
+    // 2nd harmonic (adds brightness to attack, fades faster)
+    const osc2 = ac.createOscillator();
+    const g2 = ac.createGain();
+    osc2.type = "sine";
+    osc2.frequency.value = freq * 2;
+    g2.gain.setValueAtTime(vol * 0.3, start);
+    g2.gain.setTargetAtTime(0.001, start + 0.01, 0.04); // fades quickly
+
+    // 3rd harmonic (very quiet, adds initial "ding" brightness)
+    const osc3 = ac.createOscillator();
+    const g3 = ac.createGain();
+    osc3.type = "sine";
+    osc3.frequency.value = freq * 3;
+    g3.gain.setValueAtTime(vol * 0.08, start);
+    g3.gain.setTargetAtTime(0.001, start + 0.005, 0.02);
+
+    [osc1, osc2, osc3].forEach((o, i) => {
+      const g = [g1, g2, g3][i];
+      o.connect(g);
+      g.connect(ac.destination);
+      o.start(start);
+      o.stop(start + 0.6);
+    });
+  }
+
+  // Three variations — rising intervals, marimba timbre, ~200-300ms perceived
   const chimes = [
-    // 1: Rising major third (C5→E5)
+    // 1: Rising major third (C6→E6) — bright, simple
     (ac) => {
       const t = ac.currentTime;
-      [[523.25, t, 0.15], [659.25, t + 0.08, 0.15]].forEach(([freq, start, dur]) => {
-        const osc = ac.createOscillator(); const g = ac.createGain();
-        osc.type = "triangle"; osc.frequency.value = freq;
-        g.gain.setValueAtTime(0.18, start);
-        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
-        osc.connect(g); g.connect(ac.destination);
-        osc.start(start); osc.stop(start + dur);
-      });
+      chimeNote(ac, 1046.5, t, 0.18);
+      chimeNote(ac, 1318.5, t + 0.1, 0.2);
     },
-    // 2: Perfect fifth (C5→G5)
+    // 2: Rising perfect fifth (G5→D6) — open, warm
     (ac) => {
       const t = ac.currentTime;
-      [[523.25, t, 0.18], [783.99, t + 0.1, 0.18]].forEach(([freq, start, dur]) => {
-        const osc = ac.createOscillator(); const g = ac.createGain();
-        osc.type = "triangle"; osc.frequency.value = freq;
-        g.gain.setValueAtTime(0.16, start);
-        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
-        osc.connect(g); g.connect(ac.destination);
-        osc.start(start); osc.stop(start + dur);
-      });
+      chimeNote(ac, 783.99, t, 0.17);
+      chimeNote(ac, 1174.7, t + 0.11, 0.19);
     },
-    // 3: Gentle three-note (E5→G5→C6)
+    // 3: Rising arpeggio (E5→G5→C6) — playful, resolved
     (ac) => {
       const t = ac.currentTime;
-      [[659.25, t, 0.12], [783.99, t + 0.07, 0.12], [1046.5, t + 0.14, 0.16]].forEach(([freq, start, dur]) => {
-        const osc = ac.createOscillator(); const g = ac.createGain();
-        osc.type = "triangle"; osc.frequency.value = freq;
-        g.gain.setValueAtTime(0.14, start);
-        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
-        osc.connect(g); g.connect(ac.destination);
-        osc.start(start); osc.stop(start + dur);
-      });
+      chimeNote(ac, 659.25, t, 0.14);
+      chimeNote(ac, 783.99, t + 0.08, 0.16);
+      chimeNote(ac, 1046.5, t + 0.16, 0.18);
     },
   ];
 
