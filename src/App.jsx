@@ -17,6 +17,74 @@ async function checkGeminiAvailable() {
 }
 
 
+// ── Correct-answer chimes (Web Audio API, no files needed) ────────────────────
+const correctSound = (() => {
+  let ctx = null;
+  let muted = localStorage.getItem("vq-muted") === "1";
+
+  function getCtx() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+
+  // Three short chime variations — triangle waves, ~250ms, gentle volume
+  const chimes = [
+    // 1: Rising major third (C5→E5)
+    (ac) => {
+      const t = ac.currentTime;
+      [[523.25, t, 0.15], [659.25, t + 0.08, 0.15]].forEach(([freq, start, dur]) => {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = "triangle"; osc.frequency.value = freq;
+        g.gain.setValueAtTime(0.18, start);
+        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+        osc.connect(g); g.connect(ac.destination);
+        osc.start(start); osc.stop(start + dur);
+      });
+    },
+    // 2: Perfect fifth (C5→G5)
+    (ac) => {
+      const t = ac.currentTime;
+      [[523.25, t, 0.18], [783.99, t + 0.1, 0.18]].forEach(([freq, start, dur]) => {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = "triangle"; osc.frequency.value = freq;
+        g.gain.setValueAtTime(0.16, start);
+        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+        osc.connect(g); g.connect(ac.destination);
+        osc.start(start); osc.stop(start + dur);
+      });
+    },
+    // 3: Gentle three-note (E5→G5→C6)
+    (ac) => {
+      const t = ac.currentTime;
+      [[659.25, t, 0.12], [783.99, t + 0.07, 0.12], [1046.5, t + 0.14, 0.16]].forEach(([freq, start, dur]) => {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = "triangle"; osc.frequency.value = freq;
+        g.gain.setValueAtTime(0.14, start);
+        g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+        osc.connect(g); g.connect(ac.destination);
+        osc.start(start); osc.stop(start + dur);
+      });
+    },
+  ];
+
+  return {
+    play() {
+      if (muted) return;
+      try {
+        const ac = getCtx();
+        chimes[Math.floor(Math.random() * chimes.length)](ac);
+      } catch (_) { /* audio not available — silently ignore */ }
+    },
+    get muted() { return muted; },
+    toggle() {
+      muted = !muted;
+      localStorage.setItem("vq-muted", muted ? "1" : "0");
+      return muted;
+    },
+  };
+})();
+
 // ── EPUB parser (uses JSZip via CDN, loaded dynamically) ──────────────────────
 async function loadJSZip() {
   if (window.JSZip) return window.JSZip;
@@ -1010,10 +1078,19 @@ const STYLES = `
     height: 100%; background: var(--gold); border-radius: 3px;
     transition: width 0.4s ease;
   }
+  .gp-bottom-row {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
   .gp-count {
-    text-align: center; font-size: 11px; color: rgba(100,70,20,0.4);
+    font-size: 11px; color: rgba(100,70,20,0.4);
     letter-spacing: 0.04em;
   }
+  .gp-mute-btn {
+    background: none; border: none; cursor: pointer; padding: 2px;
+    color: rgba(100,70,20,0.3); display: flex; align-items: center;
+    transition: color 0.15s;
+  }
+  .gp-mute-btn:hover { color: rgba(100,70,20,0.6); }
 
   /* Score strip */
   .score-strip { display: flex; justify-content: center; gap: 7px; margin-bottom: 20px; flex-wrap: wrap; }
@@ -1886,6 +1963,7 @@ function BlankCard({ asset, onCorrect }) {
 
   function handlePick(i) {
     if (blankOptions[i].isCorrect) {
+      correctSound.play();
       const picks = wrongPicks.length; // capture before state update
       setPhase("correct");
       setTimeout(() => onCorrect(picks), 1400);
@@ -2001,6 +2079,7 @@ function SpellCard({ asset, onCorrect }) {
             }, 800);
           } else {
             // review retype complete → report score
+            correctSound.play();
             setTimeout(() => onCorrect(recallMistakes), 1000);
           }
         }
@@ -2020,6 +2099,7 @@ function SpellCard({ asset, onCorrect }) {
         setRecallMistakes(mistakes);
         if (mistakes === 0) {
           // Perfect — brief pause then advance
+          correctSound.play();
           setTimeout(() => onCorrect(0), 1200);
         } else {
           // Show review inline — user can immediately start retyping
@@ -2191,6 +2271,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   );
   const [phase, setPhase] = useState("quiz");
   const [wrongPicks, setWrongPicks] = useState([]);
+  const [soundMuted, setSoundMuted] = useState(correctSound.muted);
 
   const current = queue[queuePos];
 
@@ -2210,6 +2291,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   function handleSelect(i) {
     const isCorrect = i === current.options.correct;
     if (isCorrect) {
+      correctSound.play();
       const newScore = wrongPicks.length === 0 ? "correct" : "retry";
       setScores(s => ({ ...s, [current.word]: { ...s[current.word], meaning: newScore } }));
       setPhase("correct");
@@ -2268,7 +2350,27 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
         <div className="gp-track">
           <div className="gp-fill" style={{width:`${progressPct}%`}}/>
         </div>
-        <div className="gp-count">{queuePos + 1} of {totalExercises}</div>
+        <div className="gp-bottom-row">
+          <div className="gp-count">{queuePos + 1} of {totalExercises}</div>
+          <button
+            className="gp-mute-btn"
+            onClick={() => setSoundMuted(correctSound.toggle())}
+            title={soundMuted ? "Unmute sounds" : "Mute sounds"}
+            type="button"
+          >
+            {soundMuted ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
       <div className="score-strip">
         {dotScores.map((s, i) => (
