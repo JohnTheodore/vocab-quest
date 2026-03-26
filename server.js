@@ -193,14 +193,45 @@ app.post('/api/claude', async (req, res) => {
         fullText += textBlocks.map(b => b.text).join('');
       }
       if (message.type === 'result' && message.is_error) {
-        return res.status(500).json({ error: { message: message.result || 'Agent error' } });
+        const errMsg = message.result || 'Agent error';
+        // Classify errors so the client gets an actionable error code + message
+        // instead of a generic 500. Auth errors are common when the OAuth token
+        // expires in headless environments like Railway.
+        const isAuthError = /unauthorized|401|auth|token.*invalid|token.*expired|credential/i.test(errMsg);
+        const code = isAuthError ? 'OAUTH_TOKEN_INVALID' : 'AGENT_ERROR';
+        const hint = isAuthError
+          ? 'The Claude OAuth token is invalid or expired. Refresh CLAUDE_CODE_OAUTH_TOKEN in your environment variables and redeploy.'
+          : errMsg;
+        console.error(`Claude agent error [${code}]:`, errMsg);
+        return res.status(isAuthError ? 502 : 500).json({ error: { code, message: hint } });
       }
     }
-    if (!fullText) return res.status(500).json({ error: { message: 'Empty response from agent' } });
+    if (!fullText) return res.status(500).json({ error: { code: 'EMPTY_RESPONSE', message: 'Empty response from agent' } });
     res.json({ content: [{ type: 'text', text: fullText }], stop_reason: 'end_turn' });
   } catch (err) {
-    console.error('Claude API error:', err);
-    if (!res.headersSent) res.status(500).json({ error: { message: err.message || 'Server error' } });
+    // Catch-all: classify the exception so the client console shows a specific
+    // error code rather than an opaque "Server error". This is especially
+    // useful when Railway returns a 503 because the agent process crashed
+    // before our code could send a JSON response.
+    const errMsg = err.message || 'Server error';
+    const isAuthError = /unauthorized|401|auth|token.*invalid|token.*expired|credential/i.test(errMsg);
+    const isSpawnError = /spawn|ENOENT|EACCES|MODULE_NOT_FOUND/i.test(errMsg);
+    let code, hint, status;
+    if (isAuthError) {
+      code = 'OAUTH_TOKEN_INVALID';
+      hint = 'The Claude OAuth token is invalid or expired. Refresh CLAUDE_CODE_OAUTH_TOKEN in your environment variables and redeploy.';
+      status = 502;
+    } else if (isSpawnError) {
+      code = 'AGENT_SPAWN_FAILED';
+      hint = `Failed to start the Claude agent process: ${errMsg}`;
+      status = 500;
+    } else {
+      code = 'CLAUDE_API_ERROR';
+      hint = errMsg;
+      status = 500;
+    }
+    console.error(`Claude API error [${code}]:`, err);
+    if (!res.headersSent) res.status(status).json({ error: { code, message: hint } });
   }
 });
 

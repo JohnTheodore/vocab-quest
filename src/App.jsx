@@ -587,8 +587,24 @@ async function claudeJSON(prompt, system = "", maxTokens = 2000) {
     body: JSON.stringify(body),
   });
   if (res.status === 401) { window.location.href = '/login'; return; }
-  const data = await res.json();
-  if (data.error) throw new Error(`API error: ${data.error.message}`);
+  // A 503 comes from Railway's reverse proxy when our server process dies
+  // (e.g. OOM or the agent subprocess crashed). The server never returns 503
+  // itself, so this is always an infrastructure-level failure.
+  if (res.status === 503) {
+    throw new Error('Server is unavailable (503). This usually means the Claude agent process crashed — check that CLAUDE_CODE_OAUTH_TOKEN is set and valid in your Railway environment variables.');
+  }
+  // Guard against non-JSON responses (e.g. Railway HTML error pages on crash)
+  let data;
+  try { data = await res.json(); } catch {
+    throw new Error(`Server returned ${res.status} with non-JSON body. The server may be out of memory or restarting.`);
+  }
+  // Surface the server's structured error code so the console message is
+  // immediately actionable (e.g. "[OAUTH_TOKEN_INVALID] ...")
+  if (data.error) {
+    const { code, message } = data.error;
+    const prefix = code ? `[${code}] ` : '';
+    throw new Error(`${prefix}${message}`);
+  }
   const raw = (data.content || []).map(b => b.text || "").join("");
   if (!raw) throw new Error("Empty response from API");
   // Extract JSON — match either an array [...] or object {...}, whichever comes first
