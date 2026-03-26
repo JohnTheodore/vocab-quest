@@ -29,7 +29,7 @@ async function saveData(data) {
 //
 // quality: 5 = first try correct, 3 = correct after hints, 1 = never got it
 
-function sm2Update(record, quality) {
+export function sm2Update(record, quality) {
   let { easeFactor, interval, repetitions } = record;
 
   if (quality >= 3) {
@@ -56,7 +56,7 @@ function sm2Update(record, quality) {
   };
 }
 
-function qualityFromScores(meaningScore, blankScore, spellingScore) {
+export function qualityFromScores(meaningScore, blankScore, spellingScore) {
   // Map game scores to SM-2 quality; use the minimum across all task types
   const scoreToQuality = { correct: 5, retry: 3, wrong: 1 };
   const mq = scoreToQuality[meaningScore] ?? 1;
