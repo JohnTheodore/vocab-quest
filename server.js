@@ -171,8 +171,11 @@ app.post('/api/login', loginLimiter, (req, res) => {
     : null;
 
   if (!AUTH_TOKEN || token === AUTH_TOKEN) {
+    // Secure flag ensures the cookie is only sent over HTTPS, preventing
+    // leakage if someone hits an HTTP URL. Omitted in dev (localhost is HTTP).
+    const secure = process.env.PORT ? '; Secure' : '';
     res.setHeader('Set-Cookie',
-      `vq_session=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${60 * 60 * 24 * 30}`
+      `vq_session=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${60 * 60 * 24 * 30}`
     );
     return res.redirect('/');
   }
