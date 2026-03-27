@@ -111,6 +111,75 @@ Don't always show the same book sentence.
 
 ---
 
+## Review Queue Design
+
+### The core shift: from chapter sessions to word-pool sessions
+
+The current "learn new words" flow is chapter-centric: pick a book, pick a chapter, study its words. The review queue pulls from **all due words across all books** — the chapter becomes metadata, not the organizing unit. `getReviewQueue()` in `wordRecords.js` already supports this: it returns all words where `nextReviewDate <= today`, sorted oldest-first, and word records already track `sources[]` for cross-book provenance.
+
+### Player-facing language
+
+In the SM-2 model, words past their `nextReviewDate` are technically "due" for review. This is the correct term in code and design docs. However, **never use "due" in player-facing UI** — it carries homework/chores connotations that undermine intrinsic motivation. Use language like:
+
+- "12 words ready to strengthen" (not "12 words due")
+- "All caught up! Next review: 3 words on Thursday" (not "No words due")
+- "Strengthen your words" (not "Review due words")
+
+The code and data model should continue using `due` / `dueWords` / `getReviewQueue()` — the reframing is purely at the UI layer.
+
+### Session structure
+
+Pick **~10-15 due words per session.** Prioritize by:
+
+1. Most overdue first (longest past `nextReviewDate`)
+2. Weakest first (lowest `easeFactor` or `repetitions`)
+
+**Interleave exercise types** rather than blocking them. Each word gets **one exercise** chosen by its SM-2 maturity level:
+
+| SM-2 State | Exercise Type | Why |
+|---|---|---|
+| `repetitions 0-1` (just learned / just failed) | MC meaning or fill-in-blank | Low friction, rebuild the link |
+| `repetitions 2-3` (familiar) | Free recall — "type what this word means" | Effortful retrieval, no cues |
+| `repetitions 4+` (approaching mastery) | Sentence generation (Claude-scored) or morphological analysis | Deep processing where it matters most |
+
+One exercise per word per review session. The word comes back at its next SM-2 interval depending on performance. This matches Folse's finding — **frequency of retrieval events matters more than depth of any single event**. Reviewing 12 words with one exercise each is better than reviewing 4 words with three exercises each.
+
+### What each review exercise looks like
+
+**MC meaning / fill-in-blank** — Same as the current chapter flow, but fill-in-blank distractors are drawn from the full review pool (not just one chapter's words), making them harder and more useful.
+
+**Free recall** — New exercise type. Show the word + the original paragraph. Text input: "What does this word mean?" Claude evaluates the response (not exact string match — the kid can use their own words, which is actually better for retention).
+
+**Morphological analysis** — New exercise type. Group words that share roots across the learner's full vocabulary. "You know 'benevolent' means well-wishing. The root 'vol' means wish. What do you think 'voluntary' means?" This works especially well in review because the kid has accumulated words across chapters and books — the morphological connections emerge naturally as vocabulary grows.
+
+**Sentence generation** — New exercise type. "Use 'ephemeral' in a sentence that shows you understand it." Claude evaluates. Reserved for words the kid has reviewed many times — the ultimate mastery check.
+
+### Context variation across reviews
+
+For early reviews, show the original book paragraph. For later reviews, Claude generates a new example sentence in a different context. This prevents the kid from memorizing "oh, 'languidly' is the one from the Sara scene" instead of actually knowing the word. See [Bolger et al. (2008)](https://doi.org/10.1080/09658210802107269) in the design principles section above.
+
+### Entry point in the app
+
+Add a **Review** button on the main screen (alongside the current book/chapter flow). It shows a count: "12 words ready to strengthen." Tapping it goes straight into a review session — no book selection, no chapter selection, no word suggestion, no asset generation phase. Just: here are your words, let's go.
+
+If zero words are due, show the next review date: "All caught up! Next review: 3 words on Thursday."
+
+### What stays the same
+
+- **SM-2 algorithm** — works as-is, with quality scoring per exercise type
+- **Word records** — already book-agnostic with `sources[]`
+- **KV store** — no schema changes needed
+- **The "learn new words" chapter flow** — unchanged; the review queue is additive
+
+### Implementation priority
+
+1. **Review entry point + session with existing exercise types** (MC, fill-in-blank, spelling) but interleaved and maturity-matched — usable immediately
+2. **Free recall** with Claude scoring — biggest retention improvement
+3. **Morphological analysis** — requires Claude to identify roots when words are first learned, stored alongside the word record
+4. **Sentence generation** — highest difficulty exercise, Claude-scored
+
+---
+
 ## Recommended Changes for Vocab Quest
 
 ### Add (in priority order)

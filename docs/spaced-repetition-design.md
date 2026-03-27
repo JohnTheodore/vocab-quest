@@ -226,4 +226,4 @@ This key is managed through the server-side key-value store (`/api/kv/vocab-ques
 
 1. **Deduplication across books.** If "languidly" appears in two different books, should it be one `WordRecord` or two? This spec treats it as one (normalized word is the key), with multiple entries in `sources[]`. This is the right call for SR purposes — knowledge of a word transfers across books.
 
-2. **Review game UX.** The review queue is data; the UI for reviewing words is not specified here. A dedicated "Review" game mode could consume the queue and feed back into the same `GameSession` / `WordRecord` model using `gameType: "review"`.
+2. **Review game UX.** ~~The review queue is data; the UI for reviewing words is not specified here.~~ **Resolved** — see the Review Queue Design section in `docs/exercise-design-research.md`. Key decisions: reviews pull from all due words across all books (not chapter-scoped), each word gets one exercise per session matched to its SM-2 maturity level, exercise types are interleaved, and sessions feed back into the standard `GameSession` / `WordRecord` model using `gameType: "review"`.
