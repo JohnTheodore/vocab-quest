@@ -1024,7 +1024,8 @@ const STYLES = `
   .blank-word { display: inline-block; background: rgba(100,70,20,0.06); border-bottom: 2px solid rgba(100,70,20,0.3); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
   .opt-btn:disabled:not(.correct):not(.wrong) { opacity: 0.5; cursor: default; }
   .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(100,70,20,0.35); margin-bottom: 3px; font-style: normal; }
-  .feedback-slot { margin-top: 16px; }
+  .feedback-slot { margin-top: 16px; transition: visibility 0s; }
+  .feedback-slot .feedback-banner { animation: none; }
   .blank-feedback .feedback-banner { margin-top: 0; }
   .feedback-banner { padding: 13px 16px; border-radius: 3px; font-size: 13.5px; line-height: 1.55; animation: fadeUp 0.3s ease; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
@@ -1238,8 +1239,8 @@ const STYLES = `
   }
 
   /* .game-active is added to .app only during the question phase. */
-  .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: center; }
-  .app.game-active > .card { display: grid; grid-template-rows: auto 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
+  .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: flex-start; }
+  .app.game-active > .card { display: grid; grid-template-rows: auto 1fr; height: calc(100dvh - 120px); overflow: hidden; }
   .app.game-active .illustration-area { min-height: 0; max-height: 35vh; display: flex; align-items: center; justify-content: center; padding: 12px; overflow: hidden; }
   .app.game-active .illustration-frame { aspect-ratio: auto; width: 100%; height: 100%; }
   .app.game-active .illustration-frame img { object-fit: contain; }
@@ -2605,13 +2606,11 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
                 );
               })}
             </div>
-            <div className="feedback-slot">
-              {phase === "hint" && (
-                <div className="feedback-banner hint">
-                  <div className="fb-head">Not quite — try again.</div>
-                  {current.hint}
-                </div>
-              )}
+            <div className="feedback-slot" style={{visibility: phase === "hint" ? "visible" : "hidden"}}>
+              <div className="feedback-banner hint">
+                <div className="fb-head">Not quite — try again.</div>
+                {current.hint}
+              </div>
             </div>
           </div>
           </div>
@@ -2923,13 +2922,11 @@ function ReviewGamePhase({ assets, onDone }) {
                 );
               })}
             </div>
-            <div className="feedback-slot">
-              {phase === "hint" && (
-                <div className="feedback-banner hint">
-                  <div className="fb-head">Not quite — try again.</div>
-                  {current.hint}
-                </div>
-              )}
+            <div className="feedback-slot" style={{visibility: phase === "hint" ? "visible" : "hidden"}}>
+              <div className="feedback-banner hint">
+                <div className="fb-head">Not quite — try again.</div>
+                {current.hint}
+              </div>
             </div>
           </div>
           </div>
