@@ -13,10 +13,10 @@
 
 import express from 'express';
 import helmet from 'helmet';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, constants } from 'fs';
 import { resolve, join } from 'path';
-import { unlink } from 'fs/promises';
-import { createHmac, createHash } from 'crypto';
+import { unlink, access } from 'fs/promises';
+import { createHmac, createHash, timingSafeEqual } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import rateLimit from 'express-rate-limit';
@@ -57,9 +57,16 @@ function parseCookies(req) {
   return cookies;
 }
 
+// Uses timingSafeEqual instead of === to prevent timing attacks, where an
+// attacker measures response time to deduce the token one character at a time.
+// The length check comes first because timingSafeEqual throws on mismatched
+// lengths — comparing two integers leaks no useful information.
 function isAuthenticated(req) {
   if (!AUTH_TOKEN) return true; // auth disabled in dev
-  return parseCookies(req)['vq_session'] === AUTH_TOKEN;
+  const token = parseCookies(req)['vq_session'] || '';
+  const a = Buffer.from(token);
+  const b = Buffer.from(AUTH_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -164,8 +171,11 @@ app.post('/api/login', loginLimiter, (req, res) => {
     : null;
 
   if (!AUTH_TOKEN || token === AUTH_TOKEN) {
+    // Secure flag ensures the cookie is only sent over HTTPS, preventing
+    // leakage if someone hits an HTTP URL. Omitted in dev (localhost is HTTP).
+    const secure = process.env.PORT ? '; Secure' : '';
     res.setHeader('Set-Cookie',
-      `vq_session=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${60 * 60 * 24 * 30}`
+      `vq_session=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${60 * 60 * 24 * 30}`
     );
     return res.redirect('/');
   }
@@ -178,6 +188,28 @@ app.post('/api/login', loginLimiter, (req, res) => {
 app.get('/api/logout', (_req, res) => {
   res.setHeader('Set-Cookie', 'vq_session=; Path=/; HttpOnly; Max-Age=0');
   res.redirect('/login');
+});
+
+// ── Health check (exempt from auth — called by Railway before routing traffic) ──
+// Verifies the data volume is mounted and writable so Railway can gate deploys
+// on actual readiness, not just "process started". Only checks local resources
+// (filesystem), NOT external APIs (Claude/Gemini), because a transient
+// third-party outage should not block deploys or trigger restarts.
+const startedAt = Date.now();
+app.get('/api/health', async (_req, res) => {
+  try {
+    await access(DATA_DIR, constants.R_OK | constants.W_OK);
+  } catch (err) {
+    console.error('[health] DATA_DIR access check failed:', DATA_DIR, err.message);
+    return res.status(503).json({ status: 'degraded', reason: 'data directory inaccessible' });
+  }
+  res.json({
+    status: 'ok',
+    // Commit SHA lets us verify which build is live after a deploy.
+    version: process.env.RAILWAY_GIT_COMMIT_SHA || 'dev',
+    // Uptime in seconds — useful for spotting crash-loop restarts.
+    uptime: Math.floor((Date.now() - startedAt) / 1000),
+  });
 });
 
 // ── All routes below require auth ─────────────────────────────────────────────
@@ -261,6 +293,11 @@ app.post('/api/gemini/:model', async (req, res) => {
   if (!GEMINI_KEY) return res.status(503).json({ error: { message: 'Gemini API key not configured' } });
 
   const { model } = req.params;
+  // 60s timeout prevents a hung Google API call from holding a connection
+  // open indefinitely. Image generation can legitimately take 30-60s, so
+  // this is generous while still failing before the user gives up.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`,
@@ -268,6 +305,7 @@ app.post('/api/gemini/:model', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req.body),
+        signal: controller.signal,
       }
     );
     const data = await response.json();
@@ -276,8 +314,11 @@ app.post('/api/gemini/:model', async (req, res) => {
     }
     res.status(response.status).json(data);
   } catch (err) {
-    console.error('Gemini API network error:', err);
-    res.status(500).json({ error: { message: err.message || 'Server error' } });
+    const message = err.name === 'AbortError' ? 'Gemini API request timed out' : (err.message || 'Server error');
+    console.error('Gemini API network error:', message);
+    res.status(504).json({ error: { message } });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
@@ -428,11 +469,6 @@ app.delete('/api/books/:hash', async (req, res) => {
 });
 
 const BOOK_INDEX_KEY = 'vocab-books-index';
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
 
 // Gemini availability check
 app.get('/api/gemini-available', (_req, res) => {

@@ -4,3 +4,7 @@ buildCommand = "npm run build"
 
 [deploy]
 startCommand = "node server.js"
+# Railway hits this before routing traffic to a new instance, ensuring the
+# data volume is mounted and the server is ready — not just that the process started.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
