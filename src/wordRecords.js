@@ -159,6 +159,13 @@ export async function getNextReviewDate() {
   return { date: future[0].nextReviewDate, count: future.filter(r => r.nextReviewDate === future[0].nextReviewDate).length };
 }
 
+// Returns the total number of words the learner has encountered across all
+// books and seeded vocabulary. Used on the home screen to show progress.
+export async function getTotalWordCount() {
+  const data = await loadData();
+  return Object.keys(data.wordRecords).length;
+}
+
 // Returns the WordRecord for a single word, or null if never seen.
 export async function getWordRecord(word) {
   const data = await loadData();

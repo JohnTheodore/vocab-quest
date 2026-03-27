@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { recordSession, exportData, getReviewQueue, getNextReviewDate } from "./wordRecords.js";
+import { recordSession, exportData, getReviewQueue, getNextReviewDate, getTotalWordCount } from "./wordRecords.js";
 
 // Is live Gemini image generation available? Asks the server so this works in prod too.
 let _geminiAvailableCache = null;
@@ -846,6 +846,11 @@ const STYLES = `
   .upload-zone input { display: none; }
 
   /* Book library */
+  .home-section-label {
+    font-family: 'Source Serif 4', Georgia, serif; font-size: 16px; font-weight: 600;
+    color: var(--text); margin-bottom: 14px;
+  }
+  .book-library-sublabel { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; }
   .review-banner {
     margin-bottom: 20px; padding: 16px 18px; background: rgba(34,120,34,0.06);
     border: 1px solid rgba(34,120,34,0.2); border-radius: 6px; cursor: pointer;
@@ -1290,15 +1295,17 @@ function UploadPhase({ onParsed, onStartReview }) {
   const [deleting, setDeleting] = useState(null); // hash of book currently being deleted
   const [reviewCount, setReviewCount] = useState(0);
   const [nextReview, setNextReview] = useState(null); // { date, count }
+  const [totalWords, setTotalWords] = useState(0);
   const inputRef = useRef();
 
   useEffect(() => { getBookIndex().then(setLibrary); }, []);
-  // Fetch the review queue count on mount so we can show the "Practice N words"
-  // banner. This is the entry point to the review flow — separate from the
-  // book/chapter flow. See docs/exercise-design-research.md § Entry point.
+  // Fetch review queue count and total vocabulary size on mount. These drive
+  // the home screen layout: whether to show the practice section, the welcome
+  // message, or the "all caught up" state.
   useEffect(() => {
     getReviewQueue().then(q => setReviewCount(q.length));
     getNextReviewDate().then(setNextReview);
+    getTotalWordCount().then(setTotalWords);
   }, []);
 
   async function handleFile(file) {
@@ -1366,87 +1373,122 @@ function UploadPhase({ onParsed, onStartReview }) {
     setTimeout(() => setFlushed(prev => { const n = { ...prev }; delete n[`${hash}-${layer}`]; return n; }), 1500);
   }
 
+  // New users: no books and no words yet. Show a welcome explanation.
+  const isNewUser = library.length === 0 && totalWords === 0;
+  // Returning users who have words (from books or seeding) see the practice section.
+  const hasWords = totalWords > 0;
+
   return (
-    <div className="card">
-      <div className="card-body">
-        {reviewCount > 0 && (
-          <div className="review-banner" onClick={onStartReview}>
-            <div className="review-banner-text">
-              <span className="review-banner-count">Practice {Math.min(reviewCount, 5)} word{Math.min(reviewCount, 5) !== 1 ? "s" : ""}</span>
-              <span className="review-banner-sub">{reviewCount} ready across your vocabulary</span>
-            </div>
-            <span className="review-banner-arrow">&rarr;</span>
-          </div>
-        )}
-        {reviewCount === 0 && nextReview && (
-          <div className="review-banner review-banner-empty">
-            <div className="review-banner-text">
-              <span className="review-banner-count">All caught up!</span>
-              <span className="review-banner-sub">Next review: {nextReview.count} word{nextReview.count !== 1 ? "s" : ""} on {new Date(nextReview.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+    <>
+      {/* ── Welcome message for first-time users ─────────────────────────── */}
+      {isNewUser && (
+        <div className="card">
+          <div className="card-body" style={{textAlign:"center",padding:"32px 24px"}}>
+            <div style={{fontSize:13,color:"var(--text-dim)",lineHeight:1.7,maxWidth:440,margin:"0 auto"}}>
+              <strong style={{color:"var(--text)"}}>How it works:</strong> Upload a book you're reading, pick a chapter, and the app will find vocabulary words to learn. After you play, the words come back for practice at just the right time so you remember them.
             </div>
           </div>
-        )}
-        {library.length > 0 && (
-          <div className="book-library">
-            <div className="book-library-label">Your books</div>
-            {library.map(b => (
-              <div key={b.hash} className={`book-entry${deleting === b.hash ? " book-entry-deleting" : ""}`}>
-                <div className="book-item" onClick={() => deleting ? null : handleSelectBook(b.hash)} style={deleting === b.hash ? { opacity: 0.5, pointerEvents: "none" } : {}}>
-                  <div className="book-item-info">
-                    <div className="book-item-title">{b.title}</div>
-                    <div className="book-item-meta">{deleting === b.hash ? "Deleting..." : `${b.chapterCount} chapter${b.chapterCount !== 1 ? "s" : ""}`}</div>
-                  </div>
-                  <div className="book-item-actions">
-                    <button className="book-item-btn kebab" onClick={e => { e.stopPropagation(); setExpandedBook(expandedBook === b.hash ? null : b.hash); }} title="Cache settings" disabled={!!deleting}>...</button>
-                    <button className="book-item-btn remove" onClick={e => handleDeleteBook(e, b.hash)} title="Remove book and all cached data" disabled={!!deleting}>{deleting === b.hash ? "\u23F3" : "\u00D7"}</button>
-                  </div>
+        </div>
+      )}
+
+      {/* ── Section 1: Practice your words ────────────────────────────────
+          Shown when the player has any words in their vocabulary. This is the
+          primary daily activity — the thing returning users should do first. */}
+      {hasWords && (
+        <div className="card">
+          <div className="card-body">
+            <div className="home-section-label">Practice your words</div>
+            {reviewCount > 0 ? (
+              <div className="review-banner" onClick={onStartReview}>
+                <div className="review-banner-text">
+                  <span className="review-banner-count">Practice {Math.min(reviewCount, 5)} word{Math.min(reviewCount, 5) !== 1 ? "s" : ""}</span>
+                  <span className="review-banner-sub">{reviewCount} ready across your vocabulary</span>
                 </div>
-                {expandedBook === b.hash && (
-                  <div className="book-cache-panel" onClick={e => e.stopPropagation()}>
-                    <div className="cache-panel-label">Flush cached data</div>
-                    {[
-                      { layer: "bible", label: "Story Bible", cost: "slowest to regenerate" },
-                      { layer: "illustrations", label: "Illustrations", cost: "moderate" },
-                      { layer: "words", label: "Word Lists", cost: "fast" },
-                    ].map(({ layer, label, cost }) => (
-                      <div key={layer} className="cache-layer-row">
-                        <span>{label} <span className="cache-layer-cost">({cost})</span></span>
-                        <button className="cache-flush-btn" onClick={e => handleFlush(e, b.hash, layer)}>
-                          {flushed[`${b.hash}-${layer}`] ? "done" : "flush"}
-                        </button>
-                      </div>
-                    ))}
-                    <button className="cache-flush-all" onClick={e => handleFlush(e, b.hash, "all")}>
-                      {flushed[`${b.hash}-all`] ? "All cleared" : "Flush All"}
-                    </button>
-                  </div>
-                )}
+                <span className="review-banner-arrow">&rarr;</span>
               </div>
-            ))}
-            <div className="library-divider">or upload a new book</div>
+            ) : (
+              <div className="review-banner review-banner-empty">
+                <div className="review-banner-text">
+                  <span className="review-banner-count">All caught up!</span>
+                  <span className="review-banner-sub">
+                    {totalWords} word{totalWords !== 1 ? "s" : ""} in your vocabulary
+                    {nextReview && <> · Next practice: {nextReview.count} word{nextReview.count !== 1 ? "s" : ""} on {new Date(nextReview.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</>}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-        <div
-          className={`upload-zone ${dragging ? "drag-over" : ""}`}
-          onClick={() => inputRef.current.click()}
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
-        >
-          <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} />
-          {loading ? (
-            <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Loading…</p></>
-          ) : (
-            <>
-              <div className="upload-icon">📖</div>
-              <h2>Upload your book</h2>
-              <p>Drop an <strong>EPUB</strong> or <strong>TXT</strong> file here, or click to browse.<br/>EPUB recommended for accurate chapter detection.</p>
-              {error && <p style={{color:"#e09090",marginTop:12}}>{error}</p>}
-            </>
+        </div>
+      )}
+
+      {/* ── Section 2: Learn new words ────────────────────────────────────
+          Book library + upload zone. Always visible so the player can add
+          new books or pick a chapter from an existing one. */}
+      <div className="card">
+        <div className="card-body">
+          <div className="home-section-label">Learn new words</div>
+          {library.length > 0 && (
+            <div className="book-library">
+              <div className="book-library-sublabel">Pick a book and chapter to find vocabulary words</div>
+              {library.map(b => (
+                <div key={b.hash} className={`book-entry${deleting === b.hash ? " book-entry-deleting" : ""}`}>
+                  <div className="book-item" onClick={() => deleting ? null : handleSelectBook(b.hash)} style={deleting === b.hash ? { opacity: 0.5, pointerEvents: "none" } : {}}>
+                    <div className="book-item-info">
+                      <div className="book-item-title">{b.title}</div>
+                      <div className="book-item-meta">{deleting === b.hash ? "Deleting..." : `${b.chapterCount} chapter${b.chapterCount !== 1 ? "s" : ""}`}</div>
+                    </div>
+                    <div className="book-item-actions">
+                      <button className="book-item-btn kebab" onClick={e => { e.stopPropagation(); setExpandedBook(expandedBook === b.hash ? null : b.hash); }} title="Cache settings" disabled={!!deleting}>...</button>
+                      <button className="book-item-btn remove" onClick={e => handleDeleteBook(e, b.hash)} title="Remove book and all cached data" disabled={!!deleting}>{deleting === b.hash ? "\u23F3" : "\u00D7"}</button>
+                    </div>
+                  </div>
+                  {expandedBook === b.hash && (
+                    <div className="book-cache-panel" onClick={e => e.stopPropagation()}>
+                      <div className="cache-panel-label">Flush cached data</div>
+                      {[
+                        { layer: "bible", label: "Story Bible", cost: "slowest to regenerate" },
+                        { layer: "illustrations", label: "Illustrations", cost: "moderate" },
+                        { layer: "words", label: "Word Lists", cost: "fast" },
+                      ].map(({ layer, label, cost }) => (
+                        <div key={layer} className="cache-layer-row">
+                          <span>{label} <span className="cache-layer-cost">({cost})</span></span>
+                          <button className="cache-flush-btn" onClick={e => handleFlush(e, b.hash, layer)}>
+                            {flushed[`${b.hash}-${layer}`] ? "done" : "flush"}
+                          </button>
+                        </div>
+                      ))}
+                      <button className="cache-flush-all" onClick={e => handleFlush(e, b.hash, "all")}>
+                        {flushed[`${b.hash}-all`] ? "All cleared" : "Flush All"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div className="library-divider">or upload a new book</div>
+            </div>
           )}
+          <div
+            className={`upload-zone ${dragging ? "drag-over" : ""}`}
+            onClick={() => inputRef.current.click()}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+          >
+            <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} />
+            {loading ? (
+              <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Loading…</p></>
+            ) : (
+              <>
+                <div className="upload-icon">📖</div>
+                <h2>Upload your book</h2>
+                <p>Drop an <strong>EPUB</strong> or <strong>TXT</strong> file here, or click to browse.<br/>EPUB recommended for accurate chapter detection.</p>
+                {error && <p style={{color:"#e09090",marginTop:12}}>{error}</p>}
+              </>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
