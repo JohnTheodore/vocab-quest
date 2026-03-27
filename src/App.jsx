@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { recordSession, exportData } from "./wordRecords.js";
+import { recordSession, exportData, getReviewQueue, getNextReviewDate } from "./wordRecords.js";
 
 // Is live Gemini image generation available? Asks the server so this works in prod too.
 let _geminiAvailableCache = null;
@@ -758,6 +758,14 @@ Respond ONLY with a raw JSON array, one object per word, in the same order:
     if (cacheKey) await storageSet(cacheKey, arr);
   }
 
+  // Also cache each word's quiz item individually for review lookups.
+  // The chapter-level cache key depends on the exact word subset selected,
+  // making it hard to find later. Per-word keys are directly addressable.
+  for (const item of arr) {
+    const wordKey = `quiz-word-${item.word.toLowerCase().trim()}`;
+    await storageSet(wordKey, item);
+  }
+
   return arr.map((item, i) => {
     const w = words[i];
     return {
@@ -838,6 +846,19 @@ const STYLES = `
   .upload-zone input { display: none; }
 
   /* Book library */
+  .review-banner {
+    margin-bottom: 20px; padding: 16px 18px; background: rgba(34,120,34,0.06);
+    border: 1px solid rgba(34,120,34,0.2); border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    transition: background 0.15s;
+  }
+  .review-banner:hover { background: rgba(34,120,34,0.1); }
+  .review-banner-empty { cursor: default; background: rgba(100,70,20,0.04); border-color: rgba(100,70,20,0.12); }
+  .review-banner-empty:hover { background: rgba(100,70,20,0.04); }
+  .review-banner-text { display: flex; flex-direction: column; gap: 3px; }
+  .review-banner-count { font-family: 'Source Serif 4', Georgia, serif; font-size: 17px; font-weight: 600; color: var(--text); }
+  .review-banner-sub { font-size: 12px; color: var(--text-dim); }
+  .review-banner-arrow { font-size: 20px; color: rgba(34,120,34,0.5); }
   .book-library { margin-bottom: 20px; }
   .book-library-label { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(100,70,20,0.45); margin-bottom: 10px; }
   .book-entry { margin-bottom: 8px; }
@@ -1259,7 +1280,7 @@ function buildImagePrompt(paragraph, bible) {
 }
 
 // ── Phase: UPLOAD ─────────────────────────────────────────────────────────────
-function UploadPhase({ onParsed }) {
+function UploadPhase({ onParsed, onStartReview }) {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1267,9 +1288,18 @@ function UploadPhase({ onParsed }) {
   const [expandedBook, setExpandedBook] = useState(null);
   const [flushed, setFlushed] = useState({}); // { "hash-layer": true } for brief confirmation
   const [deleting, setDeleting] = useState(null); // hash of book currently being deleted
+  const [reviewCount, setReviewCount] = useState(0);
+  const [nextReview, setNextReview] = useState(null); // { date, count }
   const inputRef = useRef();
 
   useEffect(() => { getBookIndex().then(setLibrary); }, []);
+  // Fetch the review queue count on mount so we can show the "Practice N words"
+  // banner. This is the entry point to the review flow — separate from the
+  // book/chapter flow. See docs/exercise-design-research.md § Entry point.
+  useEffect(() => {
+    getReviewQueue().then(q => setReviewCount(q.length));
+    getNextReviewDate().then(setNextReview);
+  }, []);
 
   async function handleFile(file) {
     if (!file) return;
@@ -1339,6 +1369,23 @@ function UploadPhase({ onParsed }) {
   return (
     <div className="card">
       <div className="card-body">
+        {reviewCount > 0 && (
+          <div className="review-banner" onClick={onStartReview}>
+            <div className="review-banner-text">
+              <span className="review-banner-count">Practice {reviewCount} word{reviewCount !== 1 ? "s" : ""}</span>
+              <span className="review-banner-sub">Words from across your books, ready to strengthen</span>
+            </div>
+            <span className="review-banner-arrow">&rarr;</span>
+          </div>
+        )}
+        {reviewCount === 0 && nextReview && (
+          <div className="review-banner review-banner-empty">
+            <div className="review-banner-text">
+              <span className="review-banner-count">All caught up!</span>
+              <span className="review-banner-sub">Next review: {nextReview.count} word{nextReview.count !== 1 ? "s" : ""} on {new Date(nextReview.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+            </div>
+          </div>
+        )}
         {library.length > 0 && (
           <div className="book-library">
             <div className="book-library-label">Your books</div>
@@ -2243,7 +2290,10 @@ function SpellCard({ asset, onCorrect }) {
     return null;
   }
 
-  const definition = asset.options.options[asset.options.correct];
+  // In the chapter flow, options is always present. In review, spelling exercises
+  // for words without cached quiz data have options: null — we just skip showing
+  // the definition in that case (the word itself is still shown for tracing).
+  const definition = asset.options?.options?.[asset.options?.correct] || null;
   const stageLabels = {
     trace: "Type each letter as you see it",
     recall: "Now spell it from memory",
@@ -2266,11 +2316,13 @@ function SpellCard({ asset, onCorrect }) {
         </div>
       </div>
 
-      <div className="card-section definition-section">
-        <div style={{fontSize:17,lineHeight:1.7,color:"var(--text)"}}>
-          {definition}
+      {definition && (
+        <div className="card-section definition-section">
+          <div style={{fontSize:17,lineHeight:1.7,color:"var(--text)"}}>
+            {definition}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
         <div className="section-label">{stageLabels[stage]}</div>
@@ -2527,6 +2579,426 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   );
 }
 
+// ── REVIEW: Exercise assignment by maturity ──────────────────────────────────
+//
+// Maps a word's SM-2 repetition count to the appropriate exercise type.
+// The principle: harder exercises for more mature words (desirable difficulty).
+// See docs/exercise-design-research.md § Review Queue Design for the research.
+//
+// Currently uses only the three existing exercise types. As new types are added
+// (free recall, sentence generation), they'll slot into the higher tiers.
+function assignExerciseType(wordRecord) {
+  const rep = wordRecord.repetitions || 0;
+  if (rep <= 1) return "meaning";       // MC — just learned or just failed, low friction
+  if (rep <= 3) return "blank";         // fill-in-blank — cued recall for familiar words
+  return "spell";                       // spelling — approaching mastery, no definition cues
+}
+
+// ── REVIEW: Loading phase — fetches cached assets for review words ───────────
+//
+// Unlike the chapter flow (which generates all assets fresh via Claude/Gemini),
+// the review flow assembles assets from cached data. Each word's quiz data
+// (definitions, MC options, hints) was cached under `quiz-word-{word}` when it
+// was first played in a chapter or seeded by scripts/seed-words.mjs.
+//
+// This phase: loads the review queue → picks top 15 → looks up cached assets
+// for each → assigns exercise types by maturity → shuffles for interleaving.
+function ReviewLoadingPhase({ onReady, onEmpty }) {
+  const [status, setStatus] = useState("loading"); // loading | error
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const queue = await getReviewQueue();
+        if (queue.length === 0) { onEmpty(); return; }
+
+        // Cap at 5 words per session to keep reviews quick and low-friction.
+        // Players can always start another session for more. getReviewQueue()
+        // already sorts most overdue first, so this naturally prioritizes words
+        // at risk of being forgotten. See Drops' time-boxing insight: short
+        // sessions reduce the "I don't have time" barrier.
+        const selected = queue.slice(0, 5);
+
+        const reviewAssets = [];
+        for (const wordRec of selected) {
+          const exerciseType = assignExerciseType(wordRec);
+          const source = wordRec.sources?.[0];
+
+          // Look up quiz data from the per-word cache. This key is written in
+          // two places: generateAllWordAssets (chapter play) and seed-words.mjs.
+          const quizItem = await storageGet(`quiz-word-${wordRec.word.toLowerCase().trim()}`);
+
+          // Try to find the original paragraph and illustration from the book's
+          // chapter cache. This only works for book-sourced words (not seeded).
+          let paragraph = "";
+          let image = null;
+          if (source?.bookHash) {
+            const bookData = await loadBookFromLibrary(source.bookHash);
+            if (bookData) {
+              const chapter = bookData.chapters.find(c => c.title === source.chapterTitle);
+              if (chapter) {
+                const chHash = await hashText(chapter.text);
+                const wordlistCache = await storageGet(`wordlist-${chHash}`);
+                const wordInfo = wordlistCache?.find(w => w.word.toLowerCase() === wordRec.word.toLowerCase());
+                paragraph = wordInfo?.paragraph || "";
+                const illustCache = await storageGet(`illust-${chHash}-${wordRec.word.toLowerCase().trim()}`);
+                image = illustCache?.dataUri || null;
+              }
+            }
+          }
+          // For seeded words (bookHash is null), the seed script stores the
+          // context sentence directly in the quiz cache entry as `paragraph`.
+          if (!paragraph && quizItem?.paragraph) {
+            paragraph = quizItem.paragraph;
+          }
+
+          if (quizItem) {
+            // Re-shuffle MC options each session so the player can't memorize
+            // option positions across reviews.
+            reviewAssets.push({
+              word: wordRec.word,
+              paragraph,
+              options: shuffleOptions({ correct: quizItem.correct ?? 0, options: quizItem.options }),
+              hint: quizItem.hint,
+              image,
+              exerciseType,
+              repetitions: wordRec.repetitions || 0,
+              source,
+            });
+          } else {
+            // No cached quiz data — fall back to spelling, which only needs
+            // the word itself (no MC options or hints required).
+            reviewAssets.push({
+              word: wordRec.word,
+              paragraph,
+              options: null,
+              hint: null,
+              image,
+              exerciseType: "spell",
+              repetitions: wordRec.repetitions || 0,
+              source,
+            });
+          }
+        }
+
+        if (reviewAssets.length === 0) { onEmpty(); return; }
+
+        // Shuffle so exercise types are interleaved (not grouped). Kornell &
+        // Bjork (2008): interleaving improved learning by 43% vs. blocking.
+        for (let i = reviewAssets.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [reviewAssets[i], reviewAssets[j]] = [reviewAssets[j], reviewAssets[i]];
+        }
+
+        onReady(reviewAssets);
+      } catch (e) {
+        console.error("Review loading failed:", e);
+        setError(e.message);
+        setStatus("error");
+      }
+    })();
+  }, []);
+
+  if (status === "error") return (
+    <div className="card"><div className="card-body" style={{textAlign:"center",padding:"48px"}}>
+      <p style={{color:"#e09090"}}>Failed to load review: {error}</p>
+    </div></div>
+  );
+
+  return (
+    <div className="card"><div className="card-body" style={{textAlign:"center",padding:"48px"}}>
+      <div className="spinner" style={{margin:"0 auto 16px"}}/>
+      <p style={{fontStyle:"normal",color:"var(--text-dim)"}}>Preparing your practice session…</p>
+    </div></div>
+  );
+}
+
+// ── REVIEW: Game phase — interleaved, one exercise per word ──────────────────
+//
+// Simpler than the chapter GamePhase: one pass through the queue, each word
+// gets exactly one exercise (determined by assignExerciseType during loading).
+// This is a separate component rather than a mode of GamePhase because the
+// chapter flow has round-management logic (3 passes, round labels, per-round
+// score tracking) that doesn't apply to reviews and would require extensive
+// conditionals to bypass.
+//
+// The score model is also different: { word → { score, exerciseType } } instead
+// of { word → { meaning, blank, spelling } }, since each word has only one exercise.
+function ReviewGamePhase({ assets, onDone }) {
+  // Build blank options for fill-in-blank exercises. Distractors are drawn from
+  // the full review pool (not one chapter), which makes them harder and more
+  // useful than chapter-scoped distractors — the words are less related.
+  const assetsWithBlanks = assets.map((a, idx) => {
+    if (a.exerciseType !== "blank") return a;
+    const otherWords = assets.filter((_, j) => j !== idx).map(x => x.word);
+    const shuffled = [...otherWords].sort(() => Math.random() - 0.5).slice(0, 3);
+    const blankArr = [{ word: a.word, isCorrect: true }, ...shuffled.map(w => ({ word: w, isCorrect: false }))];
+    for (let i = blankArr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [blankArr[i], blankArr[j]] = [blankArr[j], blankArr[i]];
+    }
+    return { ...a, blankOptions: blankArr };
+  });
+
+  const [queuePos, setQueuePos] = useState(0);
+  const [scores, setScores] = useState(
+    () => Object.fromEntries(assetsWithBlanks.map(a => [a.word, { score: null, exerciseType: a.exerciseType }]))
+  );
+  const [phase, setPhase] = useState("quiz");
+  const [wrongPicks, setWrongPicks] = useState([]);
+  const [soundMuted, setSoundMuted] = useState(correctSound.muted);
+
+  const current = assetsWithBlanks[queuePos];
+
+  useEffect(() => {
+    setPhase("quiz");
+    setWrongPicks([]);
+  }, [queuePos]);
+
+  function advance(newScores) {
+    if (queuePos >= assetsWithBlanks.length - 1) {
+      onDone(newScores);
+    } else {
+      setQueuePos(pos => pos + 1);
+    }
+  }
+
+  // MC meaning handlers
+  function handleSelect(i) {
+    const isCorrect = i === current.options.correct;
+    if (isCorrect) {
+      correctSound.play();
+      const newScore = wrongPicks.length === 0 ? "correct" : "retry";
+      const newScores = { ...scores, [current.word]: { ...scores[current.word], score: newScore } };
+      setScores(newScores);
+      setPhase("correct");
+    } else {
+      setWrongPicks(p => [...p, i]);
+      setPhase("hint");
+    }
+  }
+
+  function handleNextAfterCorrect() {
+    advance(scores);
+  }
+
+  function handleBlankCorrect(numWrong) {
+    const blankScore = numWrong === 0 ? "correct" : "retry";
+    const newScores = { ...scores, [current.word]: { ...scores[current.word], score: blankScore } };
+    setScores(newScores);
+    advance(newScores);
+  }
+
+  function handleSpellCorrect(numMistakes) {
+    const spellScore = numMistakes === 0 ? "correct" : "retry";
+    const newScores = { ...scores, [current.word]: { ...scores[current.word], score: spellScore } };
+    setScores(newScores);
+    advance(newScores);
+  }
+
+  const totalExercises = assetsWithBlanks.length;
+  const progressPct = (queuePos / totalExercises) * 100;
+
+  const exerciseLabel = { meaning: "Meaning", blank: "Fill in blank", spell: "Spelling" }[current.exerciseType] || "";
+
+  return (
+    <>
+      <div className="game-progress-bar">
+        <div className="gp-phases">
+          <span className="gp-phase gp-active">{exerciseLabel}</span>
+          <span className="gp-phase" style={{opacity:0.4}}>Practice session</span>
+        </div>
+        <div className="gp-track">
+          <div className="gp-fill" style={{width:`${progressPct}%`}}/>
+        </div>
+        <div className="gp-bottom-row">
+          <div className="gp-count">{queuePos + 1} of {totalExercises}</div>
+          <button
+            className="gp-mute-btn"
+            onClick={() => setSoundMuted(correctSound.toggle())}
+            title={soundMuted ? "Unmute sounds" : "Mute sounds"}
+            type="button"
+          >
+            {soundMuted ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {current.exerciseType === "blank" ? (
+        <BlankCard
+          key={`${current.word}-${queuePos}`}
+          asset={current}
+          onCorrect={handleBlankCorrect}
+        />
+      ) : current.exerciseType === "spell" ? (
+        <SpellCard
+          key={`${current.word}-${queuePos}`}
+          asset={current}
+          onCorrect={handleSpellCorrect}
+        />
+      ) : (
+        <div className="card">
+          {current.image && (
+            <div className="illustration-area">
+              <div className="illustration-frame">
+                <img key={current.word} src={current.image} alt={`Scene for ${current.word}`}/>
+              </div>
+            </div>
+          )}
+          <div className="game-content">
+          {phase !== "correct" && (
+          <div className="card-section">
+            <span className="vocab-word">{current.word}</span>
+            {current.paragraph && (
+              <div className="paragraph-text" style={{marginTop:10}}>
+                "<Highlighted paragraph={current.paragraph} word={current.word}/>"
+              </div>
+            )}
+          </div>
+          )}
+          <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
+            {phase !== "correct" && (
+            <>
+            <div className="question-text">What does "{current.word}" mean?</div>
+            <div className="options-grid">
+              {current.options.options.map((opt, i) => {
+                let cls = "opt-btn";
+                if (wrongPicks.includes(i)) cls += " eliminated";
+                const disabled = wrongPicks.includes(i);
+                return (
+                  <button key={i} className={cls} onClick={() => handleSelect(i)} disabled={disabled}>
+                    <span className="opt-letter">{String.fromCharCode(65+i)}</span>
+                    {opt}
+                  </button>
+                );
+              })}
+            </div>
+            </>
+            )}
+
+            <div className="feedback-slot">
+            {phase === "hint" && (
+              <div className="feedback-banner hint">
+                <div className="fb-head">Not quite — try again.</div>
+                {current.hint}
+              </div>
+            )}
+
+            {phase === "correct" && (
+              <>
+                <div className="feedback-banner correct">
+                  <div className="fb-head">{wrongPicks.length === 0 ? "Correct! ✦" : "Got it! ◆"}</div>
+                  "{current.word}" means: {current.options.options[current.options.correct]}
+                </div>
+                <button className="next-btn" onClick={handleNextAfterCorrect}>
+                  {queuePos < assetsWithBlanks.length - 1 ? "Next Word →" : "See Results"}
+                </button>
+              </>
+            )}
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── REVIEW: Results phase ────────────────────────────────────────────────────
+//
+// Single-column layout (vs. the chapter flow's 3-column meaning×blank×spelling
+// grid) because each word only had one exercise. Shows the exercise type as a
+// label so the player knows what they were tested on.
+//
+// Records the session with gameType "review" so SM-2 updates use the
+// single-exercise quality scoring (see the presentScores fix in wordRecords.js).
+function ReviewResultsPhase({ assets, scores, onDone }) {
+  const scoreConfig = {
+    correct: { bg:"rgba(34,120,34,0.07)",  border:"rgba(34,120,34,0.25)", color:"var(--correct-text)", icon:"✦", label:"first try" },
+    retry:   { bg:"rgba(140,100,20,0.07)", border:"rgba(140,100,20,0.25)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
+    wrong:   { bg:"rgba(190,50,50,0.06)",  border:"rgba(190,50,50,0.2)",   color:"var(--wrong-text)",   icon:"✗", label:"missed" },
+  };
+
+  const exerciseLabels = { meaning: "Meaning", blank: "Fill in blank", spell: "Spelling" };
+
+  const total = assets.length;
+  const perfect = assets.filter(a => scores[a.word]?.score === "correct").length;
+  const allPerfect = perfect === total;
+
+  // Record the review session on mount. Each word produces exactly one wordResult
+  // (unlike chapter sessions which produce 3 per word). The exerciseType names
+  // used internally (meaning/blank/spell) must be mapped to the taskType names
+  // that recordSession expects (meaning/fill-blank/spelling) for SM-2 scoring.
+  useEffect(() => {
+    const wordResults = assets.map(a => {
+      const s = scores[a.word];
+      const taskType = s?.exerciseType === "blank" ? "fill-blank"
+        : s?.exerciseType === "spell" ? "spelling"
+        : "meaning";
+      return {
+        word: a.word,
+        taskType,
+        firstTry: s?.score === "correct",
+        attempts: s?.score ? 1 : 0,
+      };
+    });
+    recordSession({
+      gameType: "review",
+      context: { bookTitle: "Review", bookHash: null, chapterTitle: "Practice session" },
+      wordResults,
+    });
+  }, []);
+
+  return (
+    <div className="card">
+      <div className="card-body" style={{textAlign:"center"}}>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:52,color:"var(--gold)",marginBottom:10}}>
+          {allPerfect ? "✦" : "◆"}
+        </div>
+        <div style={{fontFamily:"'Source Serif 4',Georgia,serif",fontSize:24,fontWeight:600,color:"var(--text)",marginBottom:6}}>
+          {allPerfect ? "Perfect practice!" : "Well done!"}
+        </div>
+        <div style={{fontSize:13,color:"var(--gold-dim)",marginBottom:24,fontStyle:"normal"}}>
+          {perfect} of {total} first try · Practice session
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:6,margin:"0 auto 24px",maxWidth:780}}>
+          {assets.map(a => {
+            const s = scores[a.word]?.score || "wrong";
+            const sc = scoreConfig[s] || scoreConfig.wrong;
+            const exType = scores[a.word]?.exerciseType || "meaning";
+            return (
+              <div key={a.word} className="results-word-card" style={{background:sc.bg,border:`1px solid ${sc.border}`,justifyContent:"space-between"}}>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+                  <span className="rwc-word" style={{color:sc.color,fontSize:15}}>{a.word}</span>
+                  <span className="rwc-label" style={{color:sc.color,fontSize:11}}>{sc.icon} {sc.label}</span>
+                </div>
+                <span style={{fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",color:"rgba(100,70,20,0.4)"}}>{exerciseLabels[exType]}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <button className="primary-btn" onClick={onDone}>Back to Home</button>
+        <div style={{marginTop:12}}>
+          <button className="secondary-btn" onClick={() => exportData()}>Download Progress</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Phase: RESULTS ────────────────────────────────────────────────────────────
 function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPlayAgain }) {
   const scoreConfig = {
@@ -2613,6 +3085,7 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
 // ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   // upload → bible → chapters → suggest → generating → game → results
+  // review-loading → review-game → review-results (parallel review flow)
   const [phase, setPhase] = useState("upload");
   const [bookData, setBookData] = useState(null);
   const [storyBible, setStoryBible] = useState(null);
@@ -2622,14 +3095,16 @@ export default function App() {
   const [chosenGeminiModel, setChosenGeminiModel] = useState(GEMINI_IMAGE_MODELS[0].id);
   const [gameAssets, setGameAssets] = useState([]);
   const [scores, setScores] = useState({});
+  const [reviewAssets, setReviewAssets] = useState([]);
+  const [reviewScores, setReviewScores] = useState({});
 
   return (
     <>
       <style>{STYLES}</style>
       {/* game-active class tightens spacing so the question card fits without scrolling on a tablet */}
-      <div className={`app${phase === "game" ? " game-active" : ""}`}>
+      <div className={`app${phase === "game" || phase === "review-game" ? " game-active" : ""}`}>
         {/* Hide the title on the question page — it wastes vertical space needed to fit the card */}
-        {phase !== "game" && (
+        {phase !== "game" && phase !== "review-game" && (
           <div className="app-title">
             <h1>Vocabulary Quest</h1>
             <p>Learn words from the books you love</p>
@@ -2637,7 +3112,10 @@ export default function App() {
         )}
 
         {phase === "upload" && (
-          <UploadPhase onParsed={data => { setBookData(data); setPhase("bible"); }}/>
+          <UploadPhase
+            onParsed={data => { setBookData(data); setPhase("bible"); }}
+            onStartReview={() => setPhase("review-loading")}
+          />
         )}
 
         {phase === "bible" && (
@@ -2695,6 +3173,32 @@ export default function App() {
             bookHash={bookData.hash}
             chapterTitle={chapter.title}
             onPlayAgain={() => setPhase("chapters")}
+          />
+        )}
+
+        {/* Review flow: a parallel track to the chapter flow (upload→bible→...→results).
+            Entered from the "Practice N words" banner on the upload screen.
+            review-loading fetches cached assets → review-game plays them → review-results
+            records the session and shows scores → back to upload. */}
+        {phase === "review-loading" && (
+          <ReviewLoadingPhase
+            onReady={assets => { setReviewAssets(assets); setPhase("review-game"); }}
+            onEmpty={() => setPhase("upload")}
+          />
+        )}
+
+        {phase === "review-game" && (
+          <ReviewGamePhase
+            assets={reviewAssets}
+            onDone={s => { setReviewScores(s); setPhase("review-results"); }}
+          />
+        )}
+
+        {phase === "review-results" && (
+          <ReviewResultsPhase
+            assets={reviewAssets}
+            scores={reviewScores}
+            onDone={() => setPhase("upload")}
           />
         )}
       </div>

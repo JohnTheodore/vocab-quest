@@ -116,7 +116,7 @@ The single most important signal from each game result is `firstTry`. This maps 
 | Correct after hints/wrong guesses | 3 — recalled with difficulty |
 | Never answered correctly | 1 — blackout |
 
-When a word has multiple `taskType` results in a session (e.g. both `meaning` and `fill-blank`), the **minimum** quality score across all tasks is used to update the word's SR state. The word is only considered well-learned if all task types were answered correctly on the first try.
+When a word has multiple `taskType` results in a session (e.g. both `meaning` and `fill-blank` in a chapter session), the **minimum** quality score across all **present** tasks is used. Task types not present in the session are ignored — they are not counted as "wrong". This is important for review sessions where each word has only one exercise type: a correct spelling exercise should produce quality 5, not quality 1 because meaning and fill-blank are "missing."
 
 ### SM-2 update rules
 
@@ -165,12 +165,12 @@ New game types integrate by producing a `GameSession` record with the correct `g
 
 ### Existing and planned game types
 
-| Game | `gameType` | `taskType` values |
-|---|---|---|
-| Vocabulary Quest (current) | `vocab-quest` | `meaning`, `fill-blank` |
-| Spelling Bee (planned) | `spelling-bee` | `spelling` |
-| Crossword (planned) | `crossword` | `clue-to-word` |
-| Flashcard (planned) | `flashcard` | `recall` |
+| Game | `gameType` | `taskType` values | Status |
+|---|---|---|---|
+| Chapter Play | `vocab-quest` | `meaning`, `fill-blank`, `spelling` | Implemented |
+| Review Practice | `review` | one of: `meaning`, `fill-blank`, `spelling` | Implemented |
+| Free Recall (planned) | `review` | `recall` | Planned |
+| Sentence Generation (planned) | `review` | `sentence` | Planned |
 
 ### Adding a new game
 
@@ -194,6 +194,10 @@ export async function recordSession(session): Promise<GameSession>
 
 // Returns all words due for review today, sorted by urgency (most overdue first).
 export async function getReviewQueue(): Promise<WordRecord[]>
+
+// Returns the earliest upcoming review date and count of words due on that date.
+// Used by the UI to show "All caught up! Next review: 3 words on Thursday."
+export async function getNextReviewDate(): Promise<{ date: string, count: number } | null>
 
 // Returns the full history for a single word, or null if never seen.
 export async function getWordRecord(word): Promise<WordRecord | null>
@@ -226,4 +230,4 @@ This key is managed through the server-side key-value store (`/api/kv/vocab-ques
 
 1. **Deduplication across books.** If "languidly" appears in two different books, should it be one `WordRecord` or two? This spec treats it as one (normalized word is the key), with multiple entries in `sources[]`. This is the right call for SR purposes — knowledge of a word transfers across books.
 
-2. **Review game UX.** ~~The review queue is data; the UI for reviewing words is not specified here.~~ **Resolved** — see the Review Queue Design section in `docs/exercise-design-research.md`. Key decisions: reviews pull from all due words across all books (not chapter-scoped), each word gets one exercise per session matched to its SM-2 maturity level, exercise types are interleaved, and sessions feed back into the standard `GameSession` / `WordRecord` model using `gameType: "review"`.
+2. **Review game UX.** **Resolved and implemented.** See `docs/review-queue-implementation.md` for the full design and implementation status. Key decisions: reviews pull from all due words across all books (not chapter-scoped), each word gets one exercise per session matched to its SM-2 maturity level, exercise types are interleaved, and sessions feed back into the standard `GameSession` / `WordRecord` model using `gameType: "review"`. Words can also be seeded independently of books via `scripts/seed-words.mjs`.

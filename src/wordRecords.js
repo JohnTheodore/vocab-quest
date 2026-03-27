@@ -99,7 +99,13 @@ export async function recordSession(session) {
     const meaningScore  = tasks["meaning"]?.firstTry ? "correct" : (tasks["meaning"] ? "retry" : null);
     const blankScore    = tasks["fill-blank"]?.firstTry ? "correct" : (tasks["fill-blank"] ? "retry" : null);
     const spellingScore = tasks["spelling"]?.firstTry ? "correct" : (tasks["spelling"] ? "retry" : null);
-    const quality = qualityFromScores(meaningScore ?? "wrong", blankScore ?? "wrong", spellingScore ?? "wrong");
+    // Only score task types that were actually present in this session.
+    // For review sessions, a word may only have one exercise type — missing
+    // types should be ignored, not counted as "wrong".
+    const presentScores = [meaningScore, blankScore, spellingScore].filter(s => s !== null);
+    const quality = presentScores.length > 0
+      ? Math.min(...presentScores.map(s => ({ correct: 5, retry: 3, wrong: 1 }[s] ?? 1)))
+      : 1;
 
     if (!existing) {
       // First time seeing this word — create record, then apply first SM-2 update
@@ -129,12 +135,28 @@ export async function recordSession(session) {
 }
 
 // Returns all words due for review today, most overdue first.
+// The review queue is cross-book — it pulls from all learned words regardless
+// of source. This is the core of the review system: words are word-centric,
+// not chapter-centric. See docs/exercise-design-research.md § Review Queue Design.
 export async function getReviewQueue() {
   const data = await loadData();
   const today = new Date().toISOString().slice(0, 10);
   return Object.values(data.wordRecords)
     .filter(r => r.nextReviewDate <= today)
     .sort((a, b) => a.nextReviewDate.localeCompare(b.nextReviewDate));
+}
+
+// Returns the earliest upcoming review date and how many words are due on that date.
+// Used by the UI to show "All caught up! Next review: 3 words on Thursday" when
+// the review queue is empty.
+export async function getNextReviewDate() {
+  const data = await loadData();
+  const today = new Date().toISOString().slice(0, 10);
+  const future = Object.values(data.wordRecords)
+    .filter(r => r.nextReviewDate > today)
+    .sort((a, b) => a.nextReviewDate.localeCompare(b.nextReviewDate));
+  if (future.length === 0) return null;
+  return { date: future[0].nextReviewDate, count: future.filter(r => r.nextReviewDate === future[0].nextReviewDate).length };
 }
 
 // Returns the WordRecord for a single word, or null if never seen.

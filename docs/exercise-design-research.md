@@ -177,9 +177,9 @@ The current "learn new words" flow is chapter-centric: pick a book, pick a chapt
 
 In the SM-2 model, words past their `nextReviewDate` are technically "due" for review. This is the correct term in code and design docs. However, **never use "due" in player-facing UI** — it carries homework/chores connotations that undermine intrinsic motivation. Use language like:
 
-- "12 words ready to strengthen" (not "12 words due")
+- "Practice 12 words" (not "12 words due")
 - "All caught up! Next review: 3 words on Thursday" (not "No words due")
-- "Strengthen your words" (not "Review due words")
+- "Practice your words" (not "Review due words")
 
 The code and data model should continue using `due` / `dueWords` / `getReviewQueue()` — the reframing is purely at the UI layer.
 
