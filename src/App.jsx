@@ -1013,7 +1013,8 @@ const STYLES = `
     transition: all 0.15s;
   }
   .opt-btn:hover:not(:disabled) { background: rgba(100,70,20,0.06); border-color: rgba(100,70,20,0.22); color: var(--text); }
-  .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); }
+  .opt-btn.correct { background: var(--correct); border-color: var(--correct-border); color: var(--correct-text); animation: correctPulse 0.45s ease; }
+  @keyframes correctPulse { 0%{box-shadow:0 0 0 0 rgba(34,120,34,0.3)} 50%{box-shadow:0 0 0 6px rgba(34,120,34,0.12)} 100%{box-shadow:0 0 0 0 rgba(34,120,34,0)} }
   .opt-btn.eliminated { opacity: 0.35; cursor: not-allowed; background: rgba(100,70,20,0.01); border-color: rgba(100,70,20,0.05); color: rgba(80,60,30,0.35); text-decoration: line-through; text-decoration-color: rgba(80,60,30,0.2); }
   .opt-btn.blank-opt { font-family: 'Source Serif 4', Georgia, serif; font-style: normal; font-size: 16px; }
   .options-grid.blank-options { grid-template-columns: 1fr; }
@@ -1023,7 +1024,7 @@ const STYLES = `
   .blank-word { display: inline-block; background: rgba(100,70,20,0.06); border-bottom: 2px solid rgba(100,70,20,0.3); border-radius: 2px; padding: 0 6px; min-width: 80px; text-align: center; font-style: normal; letter-spacing: 0.05em; }
   .opt-btn:disabled:not(.correct):not(.wrong) { opacity: 0.5; cursor: default; }
   .opt-letter { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: rgba(100,70,20,0.35); margin-bottom: 3px; font-style: normal; }
-  .feedback-slot { min-height: 120px; margin-top: 16px; }
+  .feedback-slot { margin-top: 16px; }
   .blank-feedback .feedback-banner { margin-top: 0; }
   .feedback-banner { padding: 13px 16px; border-radius: 3px; font-size: 13.5px; line-height: 1.55; animation: fadeUp 0.3s ease; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
@@ -1238,8 +1239,8 @@ const STYLES = `
 
   /* .game-active is added to .app only during the question phase. */
   .app.game-active { padding: 14px; height: 100dvh; box-sizing: border-box; justify-content: center; }
-  .app.game-active > .card { display: grid; grid-template-rows: 1fr 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
-  .app.game-active .illustration-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .app.game-active > .card { display: grid; grid-template-rows: auto 1fr; max-height: calc(100dvh - 80px); overflow: hidden; }
+  .app.game-active .illustration-area { min-height: 0; max-height: 35vh; display: flex; align-items: center; justify-content: center; padding: 12px; overflow: hidden; }
   .app.game-active .illustration-frame { aspect-ratio: auto; width: 100%; height: 100%; }
   .app.game-active .illustration-frame img { object-fit: contain; }
   .app.game-active .game-content { min-height: 0; overflow-y: auto; }
@@ -2449,6 +2450,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   );
   const [phase, setPhase] = useState("quiz");
   const [wrongPicks, setWrongPicks] = useState([]);
+  const [correctPick, setCorrectPick] = useState(null);
   const [soundMuted, setSoundMuted] = useState(correctSound.muted);
 
   const current = queue[queuePos];
@@ -2456,6 +2458,7 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
   useEffect(() => {
     setPhase("quiz");
     setWrongPicks([]);
+    setCorrectPick(null);
   }, [queuePos]);
 
   function advance(newScores) {
@@ -2471,16 +2474,15 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
     if (isCorrect) {
       correctSound.play();
       const newScore = wrongPicks.length === 0 ? "correct" : "retry";
-      setScores(s => ({ ...s, [current.word]: { ...s[current.word], meaning: newScore } }));
+      const newScores = { ...scores, [current.word]: { ...scores[current.word], meaning: newScore } };
+      setScores(newScores);
+      setCorrectPick(i);
       setPhase("correct");
+      setTimeout(() => advance(newScores), wrongPicks.length === 0 ? 1200 : 1500);
     } else {
       setWrongPicks(p => [...p, i]);
       setPhase("hint");
     }
-  }
-
-  function handleNextAfterCorrect() {
-    advance(scores);
   }
 
   function handleBlankCorrect(numWrong) {
@@ -2581,26 +2583,20 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
           {/* Word + paragraph merged into one section (no separate banner / "From the text" label)
               to keep the content half compact and balanced against the illustration */}
           <div className="game-content">
-          {phase !== "correct" && (
           <div className="card-section">
             <span className="vocab-word">{current.word}</span>
             <div className="paragraph-text" style={{marginTop:10}}>
               "<Highlighted paragraph={current.paragraph} word={current.word}/>"
             </div>
           </div>
-          )}
           <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
-            {phase !== "correct" && (
-            <>
             <div className="question-text">What does "{current.word}" mean?</div>
-            {/* XSS safety: options and hints are Claude-generated strings rendered as
-                JSX text children, NOT via dangerouslySetInnerHTML. React auto-escapes
-                them, so any HTML in the response displays as literal text. */}
             <div className="options-grid">
               {current.options.options.map((opt, i) => {
                 let cls = "opt-btn";
                 if (wrongPicks.includes(i)) cls += " eliminated";
-                const disabled = wrongPicks.includes(i);
+                if (correctPick === i) cls += " correct";
+                const disabled = phase === "correct" || wrongPicks.includes(i);
                 return (
                   <button key={i} className={cls} onClick={() => handleSelect(i)} disabled={disabled}>
                     <span className="opt-letter">{String.fromCharCode(65+i)}</span>
@@ -2609,28 +2605,13 @@ function GamePhase({ assets, bookTitle, chapterTitle, onDone }) {
                 );
               })}
             </div>
-            </>
-            )}
-
             <div className="feedback-slot">
-            {phase === "hint" && (
-              <div className="feedback-banner hint">
-                <div className="fb-head">Not quite — try again.</div>
-                {current.hint}
-              </div>
-            )}
-
-            {phase === "correct" && (
-              <>
-                <div className="feedback-banner correct">
-                  <div className="fb-head">{wrongPicks.length === 0 ? "Correct! ✦" : "Got it! ◆"}</div>
-                  "{current.word}" means: {current.options.options[current.options.correct]}
+              {phase === "hint" && (
+                <div className="feedback-banner hint">
+                  <div className="fb-head">Not quite — try again.</div>
+                  {current.hint}
                 </div>
-                <button className="next-btn" onClick={handleNextAfterCorrect}>
-                  {queuePos < queue.length - 1 ? "Next Word →" : "See Results"}
-                </button>
-              </>
-            )}
+              )}
             </div>
           </div>
           </div>
@@ -2808,6 +2789,7 @@ function ReviewGamePhase({ assets, onDone }) {
   );
   const [phase, setPhase] = useState("quiz");
   const [wrongPicks, setWrongPicks] = useState([]);
+  const [correctPick, setCorrectPick] = useState(null);
   const [soundMuted, setSoundMuted] = useState(correctSound.muted);
 
   const current = assetsWithBlanks[queuePos];
@@ -2815,6 +2797,7 @@ function ReviewGamePhase({ assets, onDone }) {
   useEffect(() => {
     setPhase("quiz");
     setWrongPicks([]);
+    setCorrectPick(null);
   }, [queuePos]);
 
   function advance(newScores) {
@@ -2833,15 +2816,13 @@ function ReviewGamePhase({ assets, onDone }) {
       const newScore = wrongPicks.length === 0 ? "correct" : "retry";
       const newScores = { ...scores, [current.word]: { ...scores[current.word], score: newScore } };
       setScores(newScores);
+      setCorrectPick(i);
       setPhase("correct");
+      setTimeout(() => advance(newScores), wrongPicks.length === 0 ? 1200 : 1500);
     } else {
       setWrongPicks(p => [...p, i]);
       setPhase("hint");
     }
-  }
-
-  function handleNextAfterCorrect() {
-    advance(scores);
   }
 
   function handleBlankCorrect(numWrong) {
@@ -2918,7 +2899,6 @@ function ReviewGamePhase({ assets, onDone }) {
             </div>
           )}
           <div className="game-content">
-          {phase !== "correct" && (
           <div className="card-section">
             <span className="vocab-word">{current.word}</span>
             {current.paragraph && (
@@ -2927,16 +2907,14 @@ function ReviewGamePhase({ assets, onDone }) {
               </div>
             )}
           </div>
-          )}
           <div className="card-section" style={{borderBottom:"none",paddingBottom:28}}>
-            {phase !== "correct" && (
-            <>
             <div className="question-text">What does "{current.word}" mean?</div>
             <div className="options-grid">
               {current.options.options.map((opt, i) => {
                 let cls = "opt-btn";
                 if (wrongPicks.includes(i)) cls += " eliminated";
-                const disabled = wrongPicks.includes(i);
+                if (correctPick === i) cls += " correct";
+                const disabled = phase === "correct" || wrongPicks.includes(i);
                 return (
                   <button key={i} className={cls} onClick={() => handleSelect(i)} disabled={disabled}>
                     <span className="opt-letter">{String.fromCharCode(65+i)}</span>
@@ -2945,28 +2923,13 @@ function ReviewGamePhase({ assets, onDone }) {
                 );
               })}
             </div>
-            </>
-            )}
-
             <div className="feedback-slot">
-            {phase === "hint" && (
-              <div className="feedback-banner hint">
-                <div className="fb-head">Not quite — try again.</div>
-                {current.hint}
-              </div>
-            )}
-
-            {phase === "correct" && (
-              <>
-                <div className="feedback-banner correct">
-                  <div className="fb-head">{wrongPicks.length === 0 ? "Correct! ✦" : "Got it! ◆"}</div>
-                  "{current.word}" means: {current.options.options[current.options.correct]}
+              {phase === "hint" && (
+                <div className="feedback-banner hint">
+                  <div className="fb-head">Not quite — try again.</div>
+                  {current.hint}
                 </div>
-                <button className="next-btn" onClick={handleNextAfterCorrect}>
-                  {queuePos < assetsWithBlanks.length - 1 ? "Next Word →" : "See Results"}
-                </button>
-              </>
-            )}
+              )}
             </div>
           </div>
           </div>
