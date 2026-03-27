@@ -905,6 +905,13 @@ const STYLES = `
   .cache-flush-all:hover { background: rgba(190,50,50,0.1); border-color: rgba(190,50,50,0.25); }
   .library-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--text-dim); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; }
   .library-divider::before, .library-divider::after { content: ""; flex: 1; border-top: 1px solid rgba(100,70,20,0.08); }
+  .add-book-btn {
+    display: flex; align-items: center; gap: 6px; margin-top: 12px;
+    padding: 8px 0; font-size: 13px; color: var(--text-dim);
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    transition: color 0.15s;
+  }
+  .add-book-btn:hover { color: var(--gold); }
 
   /* Chapter list */
   .chapter-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
@@ -1464,28 +1471,40 @@ function UploadPhase({ onParsed, onStartReview }) {
                   )}
                 </div>
               ))}
-              <div className="library-divider">or upload a new book</div>
+              <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} style={{display:"none"}} />
+              {loading ? (
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:12,fontSize:13,color:"var(--text-dim)"}}>
+                  <div className="spinner" style={{width:16,height:16,borderWidth:2}}/> Loading…
+                </div>
+              ) : (
+                <button className="add-book-btn" onClick={() => inputRef.current.click()}>
+                  + Add a book
+                </button>
+              )}
+              {error && <p style={{color:"#e09090",fontSize:13,marginTop:8}}>{error}</p>}
             </div>
           )}
-          <div
-            className={`upload-zone ${dragging ? "drag-over" : ""}`}
-            onClick={() => inputRef.current.click()}
-            onDragOver={e => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
-          >
-            <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} />
-            {loading ? (
-              <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Loading…</p></>
-            ) : (
-              <>
-                <div className="upload-icon">📖</div>
-                <h2>Upload your book</h2>
-                <p>Drop an <strong>EPUB</strong> or <strong>TXT</strong> file here, or click to browse.<br/>EPUB recommended for accurate chapter detection.</p>
-                {error && <p style={{color:"#e09090",marginTop:12}}>{error}</p>}
-              </>
-            )}
-          </div>
+          {library.length === 0 && (
+            <div
+              className={`upload-zone ${dragging ? "drag-over" : ""}`}
+              onClick={() => inputRef.current.click()}
+              onDragOver={e => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+            >
+              <input ref={inputRef} type="file" accept=".epub,.txt" onChange={e => handleFile(e.target.files[0])} />
+              {loading ? (
+                <><div className="spinner" style={{margin:"0 auto 16px"}}/><p>Loading…</p></>
+              ) : (
+                <>
+                  <div className="upload-icon">📖</div>
+                  <h2>Upload your book</h2>
+                  <p>Drop an <strong>EPUB</strong> or <strong>TXT</strong> file here, or click to browse.<br/>EPUB recommended for accurate chapter detection.</p>
+                  {error && <p style={{color:"#e09090",marginTop:12}}>{error}</p>}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </>
