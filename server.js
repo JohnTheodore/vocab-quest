@@ -16,7 +16,7 @@ import helmet from 'helmet';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, constants } from 'fs';
 import { resolve, join } from 'path';
 import { unlink, access } from 'fs/promises';
-import { createHmac, createHash } from 'crypto';
+import { createHmac, createHash, timingSafeEqual } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import rateLimit from 'express-rate-limit';
@@ -57,9 +57,16 @@ function parseCookies(req) {
   return cookies;
 }
 
+// Uses timingSafeEqual instead of === to prevent timing attacks, where an
+// attacker measures response time to deduce the token one character at a time.
+// The length check comes first because timingSafeEqual throws on mismatched
+// lengths — comparing two integers leaks no useful information.
 function isAuthenticated(req) {
   if (!AUTH_TOKEN) return true; // auth disabled in dev
-  return parseCookies(req)['vq_session'] === AUTH_TOKEN;
+  const token = parseCookies(req)['vq_session'] || '';
+  const a = Buffer.from(token);
+  const b = Buffer.from(AUTH_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
