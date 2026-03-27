@@ -2,6 +2,9 @@ node_modules/
 dist/
 data/
 .env
+.env.*.local
 *.tar.gz
 words.json
 .DS_Store
+.claude/
+.vscode/
