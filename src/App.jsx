@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { recordSession, exportData, getReviewQueue, getNextReviewDate, getTotalWordCount } from "./wordRecords.js";
+import { recordSession, exportData, getReviewQueue, getNextReviewDate, getTotalWordCount, getHomeData } from "./wordRecords.js";
 
 // Is live Gemini image generation available? Asks the server so this works in prod too.
 let _geminiAvailableCache = null;
@@ -1310,11 +1310,13 @@ function UploadPhase({ onParsed, onStartReview }) {
   useEffect(() => { getBookIndex().then(setLibrary); }, []);
   // Fetch review queue count and total vocabulary size on mount. These drive
   // the home screen layout: whether to show the practice section, the welcome
-  // message, or the "all caught up" state.
+  // message, or the "all caught up" state. Single fetch to avoid 3 round-trips.
   useEffect(() => {
-    getReviewQueue().then(q => setReviewCount(q.length));
-    getNextReviewDate().then(setNextReview);
-    getTotalWordCount().then(setTotalWords);
+    getHomeData().then(({ reviewCount, nextReview, totalWords }) => {
+      setReviewCount(reviewCount);
+      setNextReview(nextReview);
+      setTotalWords(totalWords);
+    });
   }, []);
 
   async function handleFile(file) {

@@ -166,6 +166,30 @@ export async function getTotalWordCount() {
   return Object.keys(data.wordRecords).length;
 }
 
+// Single-fetch home screen data. Returns reviewCount, nextReview, and totalWords
+// from one loadData() call instead of three separate round-trips.
+export async function getHomeData() {
+  const data = await loadData();
+  const today = new Date().toISOString().slice(0, 10);
+  const records = Object.values(data.wordRecords);
+
+  const reviewQueue = records
+    .filter(r => r.nextReviewDate <= today)
+    .sort((a, b) => a.nextReviewDate.localeCompare(b.nextReviewDate));
+
+  const future = records
+    .filter(r => r.nextReviewDate > today)
+    .sort((a, b) => a.nextReviewDate.localeCompare(b.nextReviewDate));
+  const nextReview = future.length === 0 ? null
+    : { date: future[0].nextReviewDate, count: future.filter(r => r.nextReviewDate === future[0].nextReviewDate).length };
+
+  return {
+    reviewCount: reviewQueue.length,
+    nextReview,
+    totalWords: records.length,
+  };
+}
+
 // Returns the WordRecord for a single word, or null if never seen.
 export async function getWordRecord(word) {
   const data = await loadData();
