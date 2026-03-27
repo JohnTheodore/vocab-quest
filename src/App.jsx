@@ -2114,6 +2114,10 @@ function SpellCard({ asset, onCorrect }) {
 
   useEffect(focusInput, [stage, focusInput]);
 
+  // Cancel any in-progress speech when the card unmounts, so audio doesn't
+  // keep playing after the user navigates away.
+  useEffect(() => () => speechSynthesis.cancel(), []);
+
   function speak(e) {
     if (e) e.stopPropagation();
     speechSynthesis.cancel();
