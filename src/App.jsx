@@ -1372,8 +1372,8 @@ function UploadPhase({ onParsed, onStartReview }) {
         {reviewCount > 0 && (
           <div className="review-banner" onClick={onStartReview}>
             <div className="review-banner-text">
-              <span className="review-banner-count">Practice {reviewCount} word{reviewCount !== 1 ? "s" : ""}</span>
-              <span className="review-banner-sub">Words from across your books, ready to strengthen</span>
+              <span className="review-banner-count">Practice {Math.min(reviewCount, 5)} word{Math.min(reviewCount, 5) !== 1 ? "s" : ""}</span>
+              <span className="review-banner-sub">{reviewCount} ready across your vocabulary</span>
             </div>
             <span className="review-banner-arrow">&rarr;</span>
           </div>
@@ -2923,7 +2923,7 @@ function ReviewGamePhase({ assets, onDone }) {
 //
 // Records the session with gameType "review" so SM-2 updates use the
 // single-exercise quality scoring (see the presentScores fix in wordRecords.js).
-function ReviewResultsPhase({ assets, scores, onDone }) {
+function ReviewResultsPhase({ assets, scores, onDone, onPracticeMore }) {
   const scoreConfig = {
     correct: { bg:"rgba(34,120,34,0.07)",  border:"rgba(34,120,34,0.25)", color:"var(--correct-text)", icon:"✦", label:"first try" },
     retry:   { bg:"rgba(140,100,20,0.07)", border:"rgba(140,100,20,0.25)", color:"var(--retry-text)",   icon:"◆", label:"with a hint" },
@@ -2935,8 +2935,9 @@ function ReviewResultsPhase({ assets, scores, onDone }) {
   const total = assets.length;
   const perfect = assets.filter(a => scores[a.word]?.score === "correct").length;
   const allPerfect = perfect === total;
+  const [remainingCount, setRemainingCount] = useState(null);
 
-  // Record the review session on mount. Each word produces exactly one wordResult
+  // Record the review session on mount, then check how many words remain. Each word produces exactly one wordResult
   // (unlike chapter sessions which produce 3 per word). The exerciseType names
   // used internally (meaning/blank/spell) must be mapped to the taskType names
   // that recordSession expects (meaning/fill-blank/spelling) for SM-2 scoring.
@@ -2957,7 +2958,7 @@ function ReviewResultsPhase({ assets, scores, onDone }) {
       gameType: "review",
       context: { bookTitle: "Review", bookHash: null, chapterTitle: "Practice session" },
       wordResults,
-    });
+    }).then(() => getReviewQueue().then(q => setRemainingCount(q.length)));
   }, []);
 
   return (
@@ -2990,7 +2991,12 @@ function ReviewResultsPhase({ assets, scores, onDone }) {
           })}
         </div>
 
-        <button className="primary-btn" onClick={onDone}>Back to Home</button>
+        {remainingCount > 0 && (
+          <button className="primary-btn" onClick={onPracticeMore}>
+            Practice more ({remainingCount} remaining)
+          </button>
+        )}
+        <button className={remainingCount > 0 ? "secondary-btn" : "primary-btn"} onClick={onDone}>Back to Home</button>
         <div style={{marginTop:12}}>
           <button className="secondary-btn" onClick={() => exportData()}>Download Progress</button>
         </div>
@@ -3012,6 +3018,7 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
   const blankPerfect    = assets.filter(a => scores[a.word]?.blank    === "correct").length;
   const spellingPerfect = assets.filter(a => scores[a.word]?.spelling === "correct").length;
   const allPerfect = meaningPerfect === total && blankPerfect === total && spellingPerfect === total;
+  const [nextPractice, setNextPractice] = useState(null);
 
   useEffect(() => {
     const wordResults = assets.flatMap(a => [
@@ -3023,7 +3030,7 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
       gameType: "vocab-quest",
       context: { bookTitle, bookHash, chapterTitle },
       wordResults,
-    });
+    }).then(() => getNextReviewDate().then(setNextPractice));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const colStyle = {fontSize:10,letterSpacing:"0.18em",textTransform:"uppercase",color:"rgba(100,70,20,0.4)",textAlign:"left",paddingLeft:16};
@@ -3073,6 +3080,11 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
           })}
         </div>
 
+        {nextPractice && (
+          <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:16,fontStyle:"normal"}}>
+            These words will come back for practice on {new Date(nextPractice.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
+          </div>
+        )}
         <button className="primary-btn" onClick={onPlayAgain}>Play Again</button>
         <div style={{marginTop:12}}>
           <button className="secondary-btn" onClick={() => exportData()}>Download Progress</button>
@@ -3097,6 +3109,10 @@ export default function App() {
   const [scores, setScores] = useState({});
   const [reviewAssets, setReviewAssets] = useState([]);
   const [reviewScores, setReviewScores] = useState({});
+  // Incremented each time we return to the upload phase so UploadPhase
+  // remounts and re-fetches the review queue count (avoids stale counts
+  // after completing a review or chapter session).
+  const [uploadKey, setUploadKey] = useState(0);
 
   return (
     <>
@@ -3113,6 +3129,7 @@ export default function App() {
 
         {phase === "upload" && (
           <UploadPhase
+            key={uploadKey}
             onParsed={data => { setBookData(data); setPhase("bible"); }}
             onStartReview={() => setPhase("review-loading")}
           />
@@ -3183,7 +3200,7 @@ export default function App() {
         {phase === "review-loading" && (
           <ReviewLoadingPhase
             onReady={assets => { setReviewAssets(assets); setPhase("review-game"); }}
-            onEmpty={() => setPhase("upload")}
+            onEmpty={() => { setUploadKey(k => k + 1); setPhase("upload"); }}
           />
         )}
 
@@ -3198,7 +3215,8 @@ export default function App() {
           <ReviewResultsPhase
             assets={reviewAssets}
             scores={reviewScores}
-            onDone={() => setPhase("upload")}
+            onPracticeMore={() => setPhase("review-loading")}
+            onDone={() => { setUploadKey(k => k + 1); setPhase("upload"); }}
           />
         )}
       </div>
