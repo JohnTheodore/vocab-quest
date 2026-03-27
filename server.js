@@ -293,6 +293,11 @@ app.post('/api/gemini/:model', async (req, res) => {
   if (!GEMINI_KEY) return res.status(503).json({ error: { message: 'Gemini API key not configured' } });
 
   const { model } = req.params;
+  // 60s timeout prevents a hung Google API call from holding a connection
+  // open indefinitely. Image generation can legitimately take 30-60s, so
+  // this is generous while still failing before the user gives up.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`,
@@ -300,6 +305,7 @@ app.post('/api/gemini/:model', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req.body),
+        signal: controller.signal,
       }
     );
     const data = await response.json();
@@ -308,8 +314,11 @@ app.post('/api/gemini/:model', async (req, res) => {
     }
     res.status(response.status).json(data);
   } catch (err) {
-    console.error('Gemini API network error:', err);
-    res.status(500).json({ error: { message: err.message || 'Server error' } });
+    const message = err.name === 'AbortError' ? 'Gemini API request timed out' : (err.message || 'Server error');
+    console.error('Gemini API network error:', message);
+    res.status(504).json({ error: { message } });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
