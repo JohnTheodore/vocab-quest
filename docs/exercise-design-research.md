@@ -61,6 +61,62 @@ Builds the **semantic network** around the word — how it relates to other word
 
 ---
 
+## Exercise Types in Practice: What Leading Apps Do
+
+The exercise types above aren't theoretical — the most effective learning apps are built around them. These examples show what works at scale and where each approach falls short.
+
+### Cloze Deletion in Context
+
+A sentence with one word blanked out; the learner fills it in.
+
+**Lingvist** built their entire product around this. Every exercise is a sentence with one missing word, and their AI selects sentences at i+1 difficulty (one unknown word in otherwise comprehensible context, following Krashen's input hypothesis). The key insight: they use *varied* sentences, not the same one every time, so learners build flexible knowledge rather than memorizing a single context. **Anki power users** independently converged on the same format — "sentence cards" with cloze deletions are considered the gold standard over basic front/back flashcards.
+
+Vocab Quest's fill-in-blank exercise is a simplified version of this. The upgrade path: use varied sentences across reviews (Claude-generated) rather than always showing the same book paragraph.
+
+### Productive Recall (Type the Answer)
+
+No options. The learner must produce the answer from memory.
+
+**WaniKani** requires typed answers for every single review — meaning and reading, no multiple choice at all. This is strict by design: the effortful retrieval builds stronger memories. **Quizlet Learn** takes a scaffolded approach: it *starts* with multiple choice (recognition), then automatically promotes words to typed-answer exercises as the learner demonstrates knowledge. Words move through Not Started → Still Learning → Mastered stages based on consistent correct typed answers, not just single correct recognitions.
+
+This maps directly to our review queue design: MC for early reviews (`repetitions 0-1`), free recall for familiar words (`repetitions 2-3`). Quizlet Learn proves this scaffolded UX works — users accept the difficulty increase because it feels earned.
+
+### Morphological Decomposition
+
+Teaching components before composites so each new item has familiar hooks.
+
+**WaniKani** built their entire business on this for Japanese: radicals → kanji → vocabulary, with enforced prerequisites. You cannot learn a kanji until its component radicals reach "Guru" stage. You cannot learn vocabulary until the kanji reach "Guru." This creates a dependency graph where every new item is partially familiar.
+
+The direct parallel for English SAT vocabulary: teach Latin/Greek roots as building blocks, then show how they compose. A learner who knows "bene-" (good), "mal-" (bad), and "vol-" (wish) can decode "benevolent," "malevolent," and "voluntary" — three words from one root. ~60% of English words encountered by middle schoolers have identifiable Latin/Greek morphemes, making this the highest-leverage exercise type for our target audience.
+
+### Mnemonic Associations
+
+Vivid, often bizarre memory hooks attached to each word.
+
+**WaniKani** writes a custom mnemonic story for every radical, kanji, and vocabulary item in their system — thousands of them, all authored by hand. Example: the radical for "cross" combined with "mouth" makes a kanji, and the story connects them in a memorable (often absurd) way. **Memrise** crowdsources these as "mems" — images, wordplay, or short stories that users create and vote on. The best mems surface to the top.
+
+Both leverage **elaborative encoding**: a bizarre mental image or story creates a stronger memory trace than a plain definition. This is the same technique used by memory competition athletes. Claude could generate a mnemonic for each vocabulary word at learn time, similar to WaniKani's approach but without the manual authoring bottleneck.
+
+### Time-Boxed Sessions
+
+Capping session length to reduce friction and force distributed practice.
+
+**Drops** limits free sessions to 5 minutes. This sounds like a limitation, but it's pedagogically sound: it leverages the spacing effect by forcing practice to be distributed across days rather than crammed into one long session. It also removes the "I don't have time" barrier — everyone has 5 minutes. The constraint is the feature.
+
+Relevant for our review queue: rather than presenting all 30 due words and risking burnout, a "strengthen for 5 minutes" option could be more effective and more inviting than "review all 30 words."
+
+### Where These Apps Fall Short
+
+These failures are worth noting so Vocab Quest can avoid them:
+
+- **Drops** pairs every word with a stylized icon but provides zero sentence context — words are learned in complete isolation, building recognition but not usable knowledge
+- **Duolingo** gamification is so effective that users farm XP by repeating easy lessons instead of tackling hard material — the game becomes the goal
+- **WaniKani** enforces rigid pacing with no way to accelerate even if you already know the material, frustrating returning learners
+- **Quizlet** relies on user-generated content with wildly inconsistent quality — no curation layer
+- **Most apps** bias toward teaching new material because it *feels* more productive, while neglecting review — the unsexy part that actually produces long-term retention
+
+---
+
 ## Sequencing: Progression Per Word
 
 ```
