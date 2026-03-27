@@ -3244,3 +3244,6 @@ export default function App() {
     </>
   );
 }
+
+// ── Test exports ─────────────────────────────────────────────────────────────
+export { GamePhase as _GamePhase, ReviewGamePhase as _ReviewGamePhase, STYLES as _STYLES };
