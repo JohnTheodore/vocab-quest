@@ -13,9 +13,9 @@
 
 import express from 'express';
 import helmet from 'helmet';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, constants } from 'fs';
 import { resolve, join } from 'path';
-import { unlink } from 'fs/promises';
+import { unlink, access } from 'fs/promises';
 import { createHmac, createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -178,6 +178,28 @@ app.post('/api/login', loginLimiter, (req, res) => {
 app.get('/api/logout', (_req, res) => {
   res.setHeader('Set-Cookie', 'vq_session=; Path=/; HttpOnly; Max-Age=0');
   res.redirect('/login');
+});
+
+// ── Health check (exempt from auth — called by Railway before routing traffic) ──
+// Verifies the data volume is mounted and writable so Railway can gate deploys
+// on actual readiness, not just "process started". Only checks local resources
+// (filesystem), NOT external APIs (Claude/Gemini), because a transient
+// third-party outage should not block deploys or trigger restarts.
+const startedAt = Date.now();
+app.get('/api/health', async (_req, res) => {
+  try {
+    await access(DATA_DIR, constants.R_OK | constants.W_OK);
+  } catch (err) {
+    console.error('[health] DATA_DIR access check failed:', DATA_DIR, err.message);
+    return res.status(503).json({ status: 'degraded', reason: 'data directory inaccessible' });
+  }
+  res.json({
+    status: 'ok',
+    // Commit SHA lets us verify which build is live after a deploy.
+    version: process.env.RAILWAY_GIT_COMMIT_SHA || 'dev',
+    // Uptime in seconds — useful for spotting crash-loop restarts.
+    uptime: Math.floor((Date.now() - startedAt) / 1000),
+  });
 });
 
 // ── All routes below require auth ─────────────────────────────────────────────
@@ -428,11 +450,6 @@ app.delete('/api/books/:hash', async (req, res) => {
 });
 
 const BOOK_INDEX_KEY = 'vocab-books-index';
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
 
 // Gemini availability check
 app.get('/api/gemini-available', (_req, res) => {
