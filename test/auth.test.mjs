@@ -23,18 +23,23 @@ import express from 'express';
 // the exact same logic in isolation without importing the full server.
 
 const SESSION_SECRET = 'test-secret-for-auth-tests';
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 function sanitizeKey(key) {
   return key.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-function hashPassword(password, userId) {
-  return crypto.scryptSync(password, userId, 64).toString('hex');
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
 }
 
-function createSessionToken(userId) {
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function createSessionToken(userId, passwordVersion) {
   const timestamp = Math.floor(Date.now() / 1000);
-  const payload = `${userId}:${timestamp}`;
+  const payload = `${userId}:${timestamp}:${passwordVersion}`;
   const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   return `${payload}:${hmac}`;
 }
@@ -42,15 +47,17 @@ function createSessionToken(userId) {
 function verifySessionToken(token) {
   if (!token) return null;
   const parts = token.split(':');
-  if (parts.length !== 3) return null;
-  const [userId, timestamp, hmac] = parts;
-  if (!userId || !timestamp || !hmac) return null;
-  const payload = `${userId}:${timestamp}`;
+  if (parts.length !== 4) return null;
+  const [userId, timestamp, passwordVersion, hmac] = parts;
+  if (!userId || !timestamp || !passwordVersion || !hmac) return null;
+  const payload = `${userId}:${timestamp}:${passwordVersion}`;
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   const a = Buffer.from(hmac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  return userId;
+  const now = Math.floor(Date.now() / 1000);
+  if (now - parseInt(timestamp, 10) > SESSION_MAX_AGE) return null;
+  return { userId, passwordVersion: parseInt(passwordVersion, 10) };
 }
 
 function resolveKey(user, key) {
@@ -93,12 +100,17 @@ function createTestServer(dataDir) {
     const users = loadUsers();
     const token = parseCookies(req)['vq_session'] || '';
     if (users) {
-      const userId = verifySessionToken(token);
-      if (!userId || !users[userId]) {
+      const session = verifySessionToken(token);
+      if (!session || !users[session.userId]) {
         if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
         return res.redirect('/login');
       }
-      req.user = { id: userId, displayName: users[userId].displayName, role: users[userId].role };
+      const u = users[session.userId];
+      if ((u.passwordVersion || 1) !== session.passwordVersion) {
+        if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired' } });
+        return res.redirect('/login');
+      }
+      req.user = { id: session.userId, displayName: u.displayName, role: u.role };
       return next();
     }
     // No users.json — auth disabled for tests
@@ -122,18 +134,26 @@ function createTestServer(dataDir) {
     if (existsSync(USERS_FILE)) {
       return res.status(403).json({ error: { message: 'Setup already completed' } });
     }
-    const { username, displayName, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ error: { message: 'Username and password are required' } });
+    const { email, displayName, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: { message: 'Email and password are required' } });
     }
-    const userId = sanitizeKey(username.trim().toLowerCase());
-    if (!userId) return res.status(400).json({ error: { message: 'Invalid username' } });
+    if (password.length < 8) {
+      return res.status(400).json({ error: { message: 'Password must be at least 8 characters' } });
+    }
+    const trimmedEmail = email.trim().toLowerCase();
+    const userId = sanitizeKey(trimmedEmail);
+    if (!userId || userId.includes(':')) return res.status(400).json({ error: { message: 'Invalid email' } });
 
+    const salt = generateSalt();
     const users = {
       [userId]: {
-        displayName: (displayName || username).trim(),
-        passwordHash: hashPassword(password, userId),
+        email: trimmedEmail,
+        displayName: (displayName || trimmedEmail).trim(),
+        passwordHash: hashPassword(password, salt),
+        salt,
         role: 'admin',
+        passwordVersion: 1,
         anthropicApiKey: null,
         geminiApiKey: null,
         createdAt: new Date().toISOString(),
@@ -163,24 +183,28 @@ function createTestServer(dataDir) {
     }
 
     saveUsers(users);
-    const token = createSessionToken(userId);
+    const token = createSessionToken(userId, 1);
     res.setHeader('Set-Cookie', `vq_session=${token}; Path=/; HttpOnly`);
     res.json({ ok: true, migrated: migrated.length });
   });
 
   // ── Login ──────────────────────────────────────────────────────────────
   app.post('/api/login', (req, res) => {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
     const users = loadUsers();
     if (!users) return res.status(400).json({ error: { message: 'No users configured' } });
 
-    const userId = sanitizeKey((username || '').trim().toLowerCase());
+    const userId = sanitizeKey((email || '').trim().toLowerCase());
     const user = users[userId];
-    if (!user || user.passwordHash !== hashPassword(password || '', userId)) {
-      return res.status(401).json({ error: { message: 'Incorrect username or password' } });
+    const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
+    const storedHash = user?.passwordHash || '';
+    const a = Buffer.from(computedHash);
+    const b = Buffer.from(storedHash);
+    if (!user || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: { message: 'Incorrect email or password' } });
     }
 
-    const token = createSessionToken(userId);
+    const token = createSessionToken(userId, user.passwordVersion || 1);
     res.setHeader('Set-Cookie', `vq_session=${token}; Path=/; HttpOnly`);
     res.json({ ok: true });
   });
@@ -202,16 +226,23 @@ function createTestServer(dataDir) {
   });
 
   app.post('/api/users', requireAdmin, (req, res) => {
-    const { id, displayName, password } = req.body;
-    if (!id || !password) return res.status(400).json({ error: { message: 'id and password are required' } });
-    const userId = sanitizeKey(id.trim().toLowerCase());
+    const { email, displayName, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: { message: 'Email and password are required' } });
+    if (password.length < 8) return res.status(400).json({ error: { message: 'Password must be at least 8 characters' } });
+    const trimmedEmail = email.trim().toLowerCase();
+    const userId = sanitizeKey(trimmedEmail);
+    if (userId.includes(':')) return res.status(400).json({ error: { message: 'Invalid email' } });
     const users = loadUsers();
     if (!users) return res.status(400).json({ error: { message: 'Multi-user mode not active' } });
-    if (users[userId]) return res.status(409).json({ error: { message: `User "${userId}" already exists` } });
+    if (users[userId]) return res.status(409).json({ error: { message: `User "${trimmedEmail}" already exists` } });
+    const salt = generateSalt();
     users[userId] = {
-      displayName: (displayName || id).trim(),
-      passwordHash: hashPassword(password, userId),
+      email: trimmedEmail,
+      displayName: (displayName || trimmedEmail).trim(),
+      passwordHash: hashPassword(password, salt),
+      salt,
       role: 'member',
+      passwordVersion: 1,
       anthropicApiKey: null,
       geminiApiKey: null,
       createdAt: new Date().toISOString(),
@@ -339,22 +370,23 @@ after(() => {
 // ── Session token unit tests ────────────────────────────────────────────────
 
 describe('Session tokens', () => {
-  it('creates a valid token that verifies back to the userId', () => {
-    const token = createSessionToken('emma');
-    const userId = verifySessionToken(token);
-    assert.equal(userId, 'emma');
+  it('creates a valid token that verifies back to the userId and passwordVersion', () => {
+    const token = createSessionToken('emma', 1);
+    const result = verifySessionToken(token);
+    assert.equal(result.userId, 'emma');
+    assert.equal(result.passwordVersion, 1);
   });
 
   it('rejects a tampered token (modified userId)', () => {
-    const token = createSessionToken('emma');
+    const token = createSessionToken('emma', 1);
     const tampered = token.replace('emma', 'evil');
     assert.equal(verifySessionToken(tampered), null);
   });
 
   it('rejects a tampered token (modified hmac)', () => {
-    const token = createSessionToken('emma');
+    const token = createSessionToken('emma', 1);
     const parts = token.split(':');
-    parts[2] = 'deadbeef'.repeat(8); // wrong HMAC
+    parts[3] = 'deadbeef'.repeat(8); // wrong HMAC
     assert.equal(verifySessionToken(parts.join(':')), null);
   });
 
@@ -363,27 +395,42 @@ describe('Session tokens', () => {
     assert.equal(verifySessionToken(null), null);
     assert.equal(verifySessionToken('just-one-part'), null);
     assert.equal(verifySessionToken('two:parts'), null);
+    assert.equal(verifySessionToken('three:parts:only'), null);
+  });
+
+  it('rejects an expired token', () => {
+    // Create a token with a timestamp 31 days in the past
+    const userId = 'emma';
+    const passwordVersion = 1;
+    const expired = Math.floor(Date.now() / 1000) - (SESSION_MAX_AGE + 1);
+    const payload = `${userId}:${expired}:${passwordVersion}`;
+    const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const token = `${payload}:${hmac}`;
+    assert.equal(verifySessionToken(token), null);
   });
 });
 
 // ── Password hashing ────────────────────────────────────────────────────────
 
 describe('Password hashing', () => {
+  const salt = generateSalt();
+
   it('produces deterministic output for same inputs', () => {
-    const h1 = hashPassword('secret', 'emma');
-    const h2 = hashPassword('secret', 'emma');
+    const h1 = hashPassword('secret', salt);
+    const h2 = hashPassword('secret', salt);
     assert.equal(h1, h2);
   });
 
   it('produces different output for different passwords', () => {
-    const h1 = hashPassword('secret', 'emma');
-    const h2 = hashPassword('different', 'emma');
+    const h1 = hashPassword('secret', salt);
+    const h2 = hashPassword('different', salt);
     assert.notEqual(h1, h2);
   });
 
-  it('produces different output for different userIds (salt effect)', () => {
-    const h1 = hashPassword('secret', 'emma');
-    const h2 = hashPassword('secret', 'alex');
+  it('produces different output for different salts', () => {
+    const salt2 = generateSalt();
+    const h1 = hashPassword('secret', salt);
+    const h2 = hashPassword('secret', salt2);
     assert.notEqual(h1, h2);
   });
 });
@@ -393,7 +440,7 @@ describe('Password hashing', () => {
 describe('First-time setup', () => {
   it('creates the admin account and returns a session cookie', async () => {
     const res = await jsonPost(`${BASE_URL}/api/setup`, {
-      username: 'dad', displayName: 'Dad', password: 'testpass123',
+      email: 'dad@example.com', displayName: 'Dad', password: 'testpass123',
     });
     assert.equal(res.status, 200);
     const cookie = extractCookie(res);
@@ -402,14 +449,14 @@ describe('First-time setup', () => {
     // Verify the cookie works for /api/me
     const meRes = await jsonGet(`${BASE_URL}/api/me`, cookie);
     const me = await meRes.json();
-    assert.equal(me.id, 'dad');
+    assert.equal(me.id, 'dad_example.com');
     assert.equal(me.displayName, 'Dad');
     assert.equal(me.role, 'admin');
   });
 
   it('rejects setup when users.json already exists', async () => {
     const res = await jsonPost(`${BASE_URL}/api/setup`, {
-      username: 'hacker', displayName: 'Hacker', password: 'nope',
+      email: 'hacker@example.com', displayName: 'Hacker', password: 'nope1234',
     });
     assert.equal(res.status, 403);
   });
@@ -420,7 +467,7 @@ describe('First-time setup', () => {
 describe('Login', () => {
   it('authenticates with correct credentials', async () => {
     const res = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'dad', password: 'testpass123',
+      email: 'dad@example.com', password: 'testpass123',
     });
     assert.equal(res.status, 200);
     const cookie = extractCookie(res);
@@ -429,14 +476,14 @@ describe('Login', () => {
 
   it('rejects incorrect password', async () => {
     const res = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'dad', password: 'wrongpassword',
+      email: 'dad@example.com', password: 'wrongpassword',
     });
     assert.equal(res.status, 401);
   });
 
   it('rejects nonexistent user', async () => {
     const res = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'nobody', password: 'testpass123',
+      email: 'nobody@example.com', password: 'testpass123',
     });
     assert.equal(res.status, 401);
   });
@@ -463,7 +510,7 @@ describe('User management (admin)', () => {
 
   before(async () => {
     const res = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'dad', password: 'testpass123',
+      email: 'dad@example.com', password: 'testpass123',
     });
     adminCookie = extractCookie(res);
   });
@@ -472,38 +519,38 @@ describe('User management (admin)', () => {
     const res = await jsonGet(`${BASE_URL}/api/users`, adminCookie);
     const users = await res.json();
     assert.ok(Array.isArray(users));
-    assert.ok(users.some(u => u.id === 'dad'));
+    assert.ok(users.some(u => u.id === 'dad_example.com'));
   });
 
   it('creates a new member account', async () => {
     const res = await jsonPost(`${BASE_URL}/api/users`, {
-      id: 'emma', displayName: 'Emma', password: 'emma123',
+      email: 'emma@example.com', displayName: 'Emma', password: 'emma1234',
     }, adminCookie);
     assert.equal(res.status, 200);
 
     // Verify the new user can log in
     const loginRes = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'emma', password: 'emma123',
+      email: 'emma@example.com', password: 'emma1234',
     });
     assert.equal(loginRes.status, 200);
   });
 
   it('rejects duplicate user creation', async () => {
     const res = await jsonPost(`${BASE_URL}/api/users`, {
-      id: 'emma', displayName: 'Emma', password: 'emma123',
+      email: 'emma@example.com', displayName: 'Emma', password: 'emma1234',
     }, adminCookie);
     assert.equal(res.status, 409);
   });
 
   it('prevents admin from deleting themselves', async () => {
-    const res = await jsonDelete(`${BASE_URL}/api/users/dad`, adminCookie);
+    const res = await jsonDelete(`${BASE_URL}/api/users/dad_example.com`, adminCookie);
     assert.equal(res.status, 400);
   });
 
   it('non-admin cannot manage users', async () => {
     // Login as emma (member)
     const loginRes = await jsonPost(`${BASE_URL}/api/login`, {
-      username: 'emma', password: 'emma123',
+      email: 'emma@example.com', password: 'emma1234',
     });
     const emmaCookie = extractCookie(loginRes);
 
@@ -513,7 +560,7 @@ describe('User management (admin)', () => {
 
     // Try to create a user
     const createRes = await jsonPost(`${BASE_URL}/api/users`, {
-      id: 'test', password: 'test',
+      email: 'test@example.com', password: 'test1234',
     }, emmaCookie);
     assert.equal(createRes.status, 403);
   });
@@ -525,9 +572,9 @@ describe('KV namespacing — full user isolation', () => {
   let dadCookie, emmaCookie;
 
   before(async () => {
-    const dadRes = await jsonPost(`${BASE_URL}/api/login`, { username: 'dad', password: 'testpass123' });
+    const dadRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'testpass123' });
     dadCookie = extractCookie(dadRes);
-    const emmaRes = await jsonPost(`${BASE_URL}/api/login`, { username: 'emma', password: 'emma123' });
+    const emmaRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'emma@example.com', password: 'emma1234' });
     emmaCookie = extractCookie(emmaRes);
   });
 
@@ -578,36 +625,36 @@ describe('User deletion with data cleanup', () => {
   let adminCookie;
 
   before(async () => {
-    const res = await jsonPost(`${BASE_URL}/api/login`, { username: 'dad', password: 'testpass123' });
+    const res = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'testpass123' });
     adminCookie = extractCookie(res);
   });
 
   it('creates a user, writes data, deletes user, verifies cleanup', async () => {
     // Create a test user
     await jsonPost(`${BASE_URL}/api/users`, {
-      id: 'testuser', displayName: 'Test', password: 'test123',
+      email: 'testuser@example.com', displayName: 'Test', password: 'test1234',
     }, adminCookie);
 
     // Login as test user and write some data
-    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { username: 'testuser', password: 'test123' });
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'testuser@example.com', password: 'test1234' });
     const testCookie = extractCookie(loginRes);
     await kvSet(BASE_URL, 'vocab-quest-data', { progress: true }, testCookie);
     await kvSet(BASE_URL, 'vocab-books-index', [{ title: 'Test Book' }], testCookie);
 
     // Verify files exist on disk
-    const filesBefore = readdirSync(tempDir).filter(f => f.startsWith('u_testuser_'));
+    const filesBefore = readdirSync(tempDir).filter(f => f.startsWith('u_testuser_example.com_'));
     assert.ok(filesBefore.length >= 2, `Expected at least 2 files, found ${filesBefore.length}`);
 
     // Admin deletes the test user
-    const deleteRes = await jsonDelete(`${BASE_URL}/api/users/testuser`, adminCookie);
+    const deleteRes = await jsonDelete(`${BASE_URL}/api/users/testuser_example.com`, adminCookie);
     assert.equal(deleteRes.status, 200);
 
     // Verify files are cleaned up
-    const filesAfter = readdirSync(tempDir).filter(f => f.startsWith('u_testuser_'));
+    const filesAfter = readdirSync(tempDir).filter(f => f.startsWith('u_testuser_example.com_'));
     assert.equal(filesAfter.length, 0, 'All user data files should be deleted');
 
     // Verify user can no longer log in
-    const loginAgain = await jsonPost(`${BASE_URL}/api/login`, { username: 'testuser', password: 'test123' });
+    const loginAgain = await jsonPost(`${BASE_URL}/api/login`, { email: 'testuser@example.com', password: 'test1234' });
     assert.equal(loginAgain.status, 401);
   });
 });
@@ -641,18 +688,18 @@ describe('Setup migration (existing data files)', () => {
   });
 
   it('migrates existing files to the new admin user namespace', async () => {
-    // Run setup — this should copy existing files to u_admin_ prefix
+    // Run setup — this should copy existing files to u_admin_example.com_ prefix
     const res = await jsonPost(`${migrationUrl}/api/setup`, {
-      username: 'admin', displayName: 'Admin', password: 'adminpass',
+      email: 'admin@example.com', displayName: 'Admin', password: 'adminpass',
     });
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.migrated, 3, 'Should migrate 3 existing files');
 
     // Verify namespaced files exist
-    assert.ok(existsSync(join(migrationDir, 'u_admin_vocab-quest-data.json')));
-    assert.ok(existsSync(join(migrationDir, 'u_admin_vocab-books-index.json')));
-    assert.ok(existsSync(join(migrationDir, 'u_admin_vocab-book-abc123.json')));
+    assert.ok(existsSync(join(migrationDir, 'u_admin_example.com_vocab-quest-data.json')));
+    assert.ok(existsSync(join(migrationDir, 'u_admin_example.com_vocab-books-index.json')));
+    assert.ok(existsSync(join(migrationDir, 'u_admin_example.com_vocab-book-abc123.json')));
 
     // Verify originals are deleted
     assert.ok(!existsSync(join(migrationDir, 'vocab-quest-data.json')));

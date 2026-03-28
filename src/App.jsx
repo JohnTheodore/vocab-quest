@@ -3223,7 +3223,7 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
 // members or delete existing ones. Communicates with GET/POST/DELETE /api/users.
 function AdminPanel({ currentUser, onClose }) {
   const [users, setUsers] = useState([]);
-  const [newId, setNewId] = useState("");
+  const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
   const [newPass, setNewPass] = useState("");
   const [error, setError] = useState("");
@@ -3238,17 +3238,17 @@ function AdminPanel({ currentUser, onClose }) {
   const handleAdd = async (e) => {
     e.preventDefault();
     setError(""); setSuccess("");
-    if (!newId.trim() || !newPass.trim()) { setError("Username and password are required"); return; }
+    if (!newEmail.trim() || !newPass.trim()) { setError("Email and password are required"); return; }
     try {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: newId.trim(), displayName: newName.trim() || newId.trim(), password: newPass }),
+        body: JSON.stringify({ email: newEmail.trim(), displayName: newName.trim() || newEmail.trim(), password: newPass }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error?.message || "Failed to create user"); return; }
-      setSuccess(`User "${newId.trim()}" created`);
-      setNewId(""); setNewName(""); setNewPass("");
+      setSuccess(`User "${newEmail.trim()}" created`);
+      setNewEmail(""); setNewName(""); setNewPass("");
       // Refresh the user list
       const updated = await fetch("/api/users").then(r => r.json());
       setUsers(updated);
@@ -3285,7 +3285,7 @@ function AdminPanel({ currentUser, onClose }) {
         ))}
       </ul>
       <form className="add-user-form" onSubmit={handleAdd}>
-        <input placeholder="Username" value={newId} onChange={e => setNewId(e.target.value)} />
+        <input placeholder="Email" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} />
         <input placeholder="Display name" value={newName} onChange={e => setNewName(e.target.value)} />
         <input placeholder="Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} />
         <button type="submit">Add User</button>
@@ -3346,7 +3346,7 @@ export default function App() {
                 {showAdmin ? "Hide Admin" : "Admin"}
               </button>
             )}
-            <a href="/api/logout">Log out</a>
+            <button className="link-btn" onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { window.location.href = '/login'; })}>Log out</button>
           </div>
         )}
 

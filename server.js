@@ -118,13 +118,20 @@ function saveUsers(users) {
 }
 
 /**
- * Hash a password using scrypt (memory-hard KDF). Resistant to GPU/ASIC
- * brute-force attacks, unlike plain SHA-256. The userId serves as a unique
- * salt per account — no two users produce the same hash even with identical
- * passwords. Node's built-in crypto.scryptSync requires no new dependencies.
+ * Generate a random 16-byte salt for password hashing.
  */
-function hashPassword(password, userId) {
-  return crypto.scryptSync(password, userId, 64).toString('hex');
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * Hash a password using scrypt (memory-hard KDF). Resistant to GPU/ASIC
+ * brute-force attacks, unlike plain SHA-256. A random per-user salt ensures
+ * no two users produce the same hash even with identical passwords.
+ * Node's built-in crypto.scryptSync requires no new dependencies.
+ */
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
 // ── Session token helpers ────────────────────────────────────────────────────
@@ -138,37 +145,41 @@ const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
 /**
  * Create a signed session token for the given userId.
- * Format: "userId:timestamp:hmac" — the HMAC covers userId + timestamp
- * so neither can be tampered with.
+ * Format: "userId:timestamp:passwordVersion:hmac" — the HMAC covers all
+ * fields so none can be tampered with. passwordVersion enables automatic
+ * invalidation when a user changes their password.
  */
-function createSessionToken(userId) {
+function createSessionToken(userId, passwordVersion) {
   const timestamp = Math.floor(Date.now() / 1000);
-  const payload = `${userId}:${timestamp}`;
+  const payload = `${userId}:${timestamp}:${passwordVersion}`;
   const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   return `${payload}:${hmac}`;
 }
 
 /**
- * Verify a session token and return the userId if valid, or null if invalid.
- * Splits the token into userId:timestamp:hmac, recomputes the HMAC, and
- * compares using timingSafeEqual to prevent timing attacks.
+ * Verify a session token and return { userId, passwordVersion } if valid,
+ * or null if invalid/expired. Splits the token into its 4 parts, recomputes
+ * the HMAC, compares using timingSafeEqual, and checks timestamp expiry.
  */
 function verifySessionToken(token) {
   if (!token) return null;
   const parts = token.split(':');
-  // Must have exactly 3 parts: userId, timestamp, hmac
-  if (parts.length !== 3) return null;
-  const [userId, timestamp, hmac] = parts;
-  if (!userId || !timestamp || !hmac) return null;
+  if (parts.length !== 4) return null;
+  const [userId, timestamp, passwordVersion, hmac] = parts;
+  if (!userId || !timestamp || !passwordVersion || !hmac) return null;
 
   // Recompute the expected HMAC and compare timing-safely
-  const payload = `${userId}:${timestamp}`;
+  const payload = `${userId}:${timestamp}:${passwordVersion}`;
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   const a = Buffer.from(hmac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
 
-  return userId;
+  // Enforce server-side expiry (Fix #2)
+  const now = Math.floor(Date.now() / 1000);
+  if (now - parseInt(timestamp, 10) > SESSION_MAX_AGE) return null;
+
+  return { userId, passwordVersion: parseInt(passwordVersion, 10) };
 }
 
 /**
@@ -206,13 +217,18 @@ function requireAuth(req, res, next) {
 
   if (users) {
     // ── Multi-user mode ──────────────────────────────────────────────────
-    const userId = verifySessionToken(token);
-    if (!userId || !users[userId]) {
+    const session = verifySessionToken(token);
+    if (!session || !users[session.userId]) {
       if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
       return res.redirect('/login');
     }
-    const u = users[userId];
-    req.user = { id: userId, displayName: u.displayName, role: u.role };
+    const u = users[session.userId];
+    // Reject sessions from before a password change
+    if ((u.passwordVersion || 1) !== session.passwordVersion) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired — please log in again' } });
+      return res.redirect('/login');
+    }
+    req.user = { id: session.userId, displayName: u.displayName, role: u.role };
     return next();
   }
 
@@ -243,6 +259,12 @@ function requireAuth(req, res, next) {
 
 function sanitizeKey(key) {
   return key.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmail(str) {
+  return EMAIL_RE.test(str);
 }
 
 /**
@@ -313,6 +335,17 @@ const LOGIN_STYLES = `
     .error { color: #b83030; font-size: 13px; text-align: center; }
 `;
 
+// Brute-force protection: 5 attempts per 15 minutes per IP.
+// In-memory store resets on restart, which is acceptable for a single-process
+// deploy. Applied to login and setup routes.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Too many attempts — try again in 15 minutes' } },
+});
+
 const app = express();
 // Security headers (X-Frame-Options, HSTS, nosniff, etc.). CSP is disabled
 // because the app uses inline styles, CDN scripts (JSZip), Google Fonts, and
@@ -345,7 +378,7 @@ app.get('/setup', (_req, res) => {
   <form method="POST" action="/api/setup">
     <h1>Vocab Quest</h1>
     <p class="subtitle">Create your admin account</p>
-    <input type="text" name="username" placeholder="Username" required autofocus autocomplete="username">
+    <input type="email" name="email" placeholder="Email" required autofocus autocomplete="email">
     <input type="text" name="displayName" placeholder="Display name" required>
     <input type="password" name="password" placeholder="Password" required autocomplete="new-password">
     <button type="submit">Create Account</button>
@@ -354,30 +387,43 @@ app.get('/setup', (_req, res) => {
 </html>`);
 });
 
-app.post('/api/setup', (req, res) => {
+app.post('/api/setup', authLimiter, (req, res) => {
   // Guard: only works when no users exist yet. Once users.json is created,
   // this endpoint is permanently locked (returns 403).
   if (existsSync(USERS_FILE)) {
     return res.status(403).json({ error: { message: 'Setup already completed' } });
   }
 
-  const { username, displayName, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: { message: 'Username and password are required' } });
+  const { email, displayName, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: { message: 'Email and password are required' } });
   }
 
-  // Sanitize the username to be safe as a file prefix (same rules as KV keys)
-  const userId = sanitizeKey(username.trim().toLowerCase());
-  if (!userId) {
-    return res.status(400).json({ error: { message: 'Invalid username' } });
+  if (password.length < 8) {
+    return res.status(400).json({ error: { message: 'Password must be at least 8 characters' } });
+  }
+
+  const trimmedEmail = email.trim().toLowerCase();
+  if (!isValidEmail(trimmedEmail)) {
+    return res.status(400).json({ error: { message: 'Invalid email address' } });
+  }
+
+  // Sanitize the email to be safe as a file prefix (same rules as KV keys)
+  const userId = sanitizeKey(trimmedEmail);
+  if (!userId || userId.includes(':')) {
+    return res.status(400).json({ error: { message: 'Invalid email' } });
   }
 
   // Create the first user with admin role
+  const salt = generateSalt();
   const users = {
     [userId]: {
-      displayName: (displayName || username).trim(),
-      passwordHash: hashPassword(password, userId),
+      email: trimmedEmail,
+      displayName: (displayName || trimmedEmail).trim(),
+      passwordHash: hashPassword(password, salt),
+      salt,
       role: 'admin',
+      passwordVersion: 1,
       // Reserved for future per-user API key support (not used yet)
       anthropicApiKey: null,
       geminiApiKey: null,
@@ -437,7 +483,7 @@ app.post('/api/setup', (req, res) => {
   saveUsers(users);
 
   // Log the user in immediately by setting their session cookie
-  const token = createSessionToken(userId);
+  const token = createSessionToken(userId, 1);
   res.setHeader('Set-Cookie', sessionCookie(token));
   res.redirect('/');
 });
@@ -464,7 +510,7 @@ app.get('/login', (_req, res) => {
 <body>
   <form method="POST" action="/api/login">
     <h1>Vocab Quest</h1>
-    <input type="text" name="username" placeholder="Username" autofocus autocomplete="username">
+    <input type="email" name="email" placeholder="Email" autofocus autocomplete="email">
     <input type="password" name="password" placeholder="Password" autocomplete="current-password">
     <button type="submit">Enter</button>
     ${res.locals.error ? `<p class="error">${res.locals.error}</p>` : ''}
@@ -493,35 +539,29 @@ app.get('/login', (_req, res) => {
 </html>`);
 });
 
-// Brute-force protection: 5 attempts per 15 minutes per IP.
-// In-memory store resets on restart, which is acceptable for a single-process
-// deploy. Only applied to this route — other endpoints are behind auth already.
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: { message: 'Too many login attempts — try again in 15 minutes' } },
-});
-
-app.post('/api/login', loginLimiter, (req, res) => {
-  const { username, password } = req.body;
+app.post('/api/login', authLimiter, (req, res) => {
+  const { email, password } = req.body;
   const users = loadUsers();
 
   if (users) {
     // ── Multi-user login ─────────────────────────────────────────────────
-    // Look up the user by username, verify the scrypt hash, and issue a
-    // signed session token. The username is sanitized to match the key
+    // Look up the user by email, verify the scrypt hash, and issue a
+    // signed session token. The email is sanitized to match the key
     // format in users.json (lowercase, safe characters only).
-    const userId = sanitizeKey((username || '').trim().toLowerCase());
+    const userId = sanitizeKey((email || '').trim().toLowerCase());
     const user = users[userId];
-    if (!user || user.passwordHash !== hashPassword(password || '', userId)) {
-      res.locals.error = 'Incorrect username or password';
+    // Always compute hash to avoid leaking whether user exists via timing
+    const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
+    const storedHash = user?.passwordHash || '';
+    const a = Buffer.from(computedHash);
+    const b = Buffer.from(storedHash);
+    if (!user || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      res.locals.error = 'Incorrect email or password';
       res.status(401);
       return app.handle({ ...req, method: 'GET', url: '/login' }, res);
     }
 
-    const token = createSessionToken(userId);
+    const token = createSessionToken(userId, user.passwordVersion || 1);
     res.setHeader('Set-Cookie', sessionCookie(token));
     return res.redirect('/');
   }
@@ -543,7 +583,7 @@ app.post('/api/login', loginLimiter, (req, res) => {
   app.handle({ ...req, method: 'GET', url: '/login' }, res);
 });
 
-app.get('/api/logout', (_req, res) => {
+app.post('/api/logout', (_req, res) => {
   res.setHeader('Set-Cookie', 'vq_session=; Path=/; HttpOnly; Max-Age=0');
   res.redirect('/login');
 });
@@ -605,6 +645,7 @@ app.get('/api/users', requireAdmin, (_req, res) => {
   if (!users) return res.json([]);
   const list = Object.entries(users).map(([id, u]) => ({
     id,
+    email: u.email || id,
     displayName: u.displayName,
     role: u.role,
     createdAt: u.createdAt,
@@ -614,14 +655,23 @@ app.get('/api/users', requireAdmin, (_req, res) => {
 
 // POST /api/users — create a new user account
 app.post('/api/users', requireAdmin, (req, res) => {
-  const { id, displayName, password } = req.body;
-  if (!id || !password) {
-    return res.status(400).json({ error: { message: 'id and password are required' } });
+  const { email, displayName, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: { message: 'Email and password are required' } });
   }
 
-  const userId = sanitizeKey(id.trim().toLowerCase());
-  if (!userId) {
-    return res.status(400).json({ error: { message: 'Invalid user id' } });
+  if (password.length < 8) {
+    return res.status(400).json({ error: { message: 'Password must be at least 8 characters' } });
+  }
+
+  const trimmedEmail = email.trim().toLowerCase();
+  if (!isValidEmail(trimmedEmail)) {
+    return res.status(400).json({ error: { message: 'Invalid email address' } });
+  }
+
+  const userId = sanitizeKey(trimmedEmail);
+  if (!userId || userId.includes(':')) {
+    return res.status(400).json({ error: { message: 'Invalid email' } });
   }
 
   const users = loadUsers();
@@ -629,13 +679,17 @@ app.post('/api/users', requireAdmin, (req, res) => {
     return res.status(400).json({ error: { message: 'Multi-user mode not active. Run /setup first.' } });
   }
   if (users[userId]) {
-    return res.status(409).json({ error: { message: `User "${userId}" already exists` } });
+    return res.status(409).json({ error: { message: `User "${trimmedEmail}" already exists` } });
   }
 
+  const salt = generateSalt();
   users[userId] = {
-    displayName: (displayName || id).trim(),
-    passwordHash: hashPassword(password, userId),
+    email: trimmedEmail,
+    displayName: (displayName || trimmedEmail).trim(),
+    passwordHash: hashPassword(password, salt),
+    salt,
     role: 'member',
+    passwordVersion: 1,
     // Reserved for future per-user API key support (not used yet)
     anthropicApiKey: null,
     geminiApiKey: null,
