@@ -4,7 +4,7 @@
  * Spins up a minimal Express server that mirrors the auth, user management,
  * KV namespacing, and setup endpoints from server.js. Tests the full lifecycle:
  * first-time setup, login, session tokens, KV isolation between users, admin
- * user management, and legacy single-password fallback.
+ * user management, and password reset.
  *
  * Run: node --test test/auth.test.mjs
  */
@@ -64,7 +64,6 @@ function verifySessionToken(token) {
 
 function resolveKey(user, key) {
   const sanitized = sanitizeKey(key);
-  if (!user) return sanitized;
   return `u_${sanitizeKey(user.id)}_${sanitized}`;
 }
 
@@ -97,26 +96,24 @@ function createTestServer(dataDir) {
     return cookies;
   }
 
-  // Auth middleware — multi-user mode only (no legacy fallback in tests)
   function requireAuth(req, res, next) {
     const users = loadUsers();
-    const token = parseCookies(req)['vq_session'] || '';
-    if (users) {
-      const session = verifySessionToken(token);
-      if (!session || !users[session.userId]) {
-        if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
-        return res.redirect('/login');
-      }
-      const u = users[session.userId];
-      if ((u.passwordVersion || 1) !== session.passwordVersion) {
-        if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired' } });
-        return res.redirect('/login');
-      }
-      req.user = { id: session.userId, displayName: u.displayName, role: u.role };
-      return next();
+    if (!users) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'No users configured' } });
+      return res.redirect('/setup');
     }
-    // No users.json — auth disabled for tests
-    req.user = null;
+    const token = parseCookies(req)['vq_session'] || '';
+    const session = verifySessionToken(token);
+    if (!session || !users[session.userId]) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
+      return res.redirect('/login');
+    }
+    const u = users[session.userId];
+    if ((u.passwordVersion || 1) !== session.passwordVersion) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired' } });
+      return res.redirect('/login');
+    }
+    req.user = { id: session.userId, displayName: u.displayName, role: u.role };
     next();
   }
 
@@ -298,7 +295,6 @@ function createTestServer(dataDir) {
   app.use(requireAuth);
 
   app.get('/api/me', (req, res) => {
-    if (!req.user) return res.json(null);
     res.json({ id: req.user.id, displayName: req.user.displayName, role: req.user.role });
   });
 
@@ -517,6 +513,49 @@ describe('Password hashing', () => {
     const h1 = hashPassword('secret', salt);
     const h2 = hashPassword('secret', salt2);
     assert.notEqual(h1, h2);
+  });
+});
+
+// ── No users configured (pre-setup state) ──────────────────────────────────
+
+describe('Pre-setup state (no users.json)', () => {
+  let freshDir, freshServer, freshUrl;
+
+  before(async () => {
+    freshDir = mkdtempSync(join(tmpdir(), 'vq-presetup-test-'));
+    const app = createTestServer(freshDir);
+    await new Promise((resolve) => {
+      freshServer = app.listen(0, () => {
+        freshUrl = `http://localhost:${freshServer.address().port}`;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    freshServer?.close();
+    if (freshDir) rmSync(freshDir, { recursive: true, force: true });
+  });
+
+  it('API requests return 401 with "No users configured" message', async () => {
+    const res = await jsonGet(`${freshUrl}/api/me`);
+    assert.equal(res.status, 401);
+    const data = await res.json();
+    assert.ok(data.error.message.includes('No users configured'));
+  });
+
+  it('login returns error when no users exist', async () => {
+    const res = await jsonPost(`${freshUrl}/api/login`, {
+      email: 'anyone@example.com', password: 'password123',
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.ok(data.error.message.includes('No users configured'));
+  });
+
+  it('KV API returns 401 before setup', async () => {
+    const res = await jsonGet(`${freshUrl}/api/kv/some-key`);
+    assert.equal(res.status, 401);
   });
 });
 

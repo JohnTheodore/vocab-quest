@@ -2,9 +2,8 @@
 
 ## 1. Overview
 
-Vocab Quest currently uses a single shared password (`AUTH_PASSWORD` env var) to
-gate access. All data — books, illustrations, vocabulary progress — lives in a
-flat `data/` directory with no per-user separation. This design adds:
+Vocab Quest uses multi-user email/password authentication. Each user gets a
+fully isolated experience with their own data. This design covers:
 
 - **Individual user accounts** so each family member (or friend) gets their own
   isolated experience — as if they had their very own copy of the app.
@@ -14,8 +13,7 @@ flat `data/` directory with no per-user separation. This design adds:
   routing is implemented yet.
 - **Admin and member roles** with a first-run setup flow and an in-app admin
   panel for managing accounts.
-- **Backwards compatibility** — deployments without `users.json` continue to
-  work exactly as they do today (single-password mode).
+- **Password reset via email** using Resend as the transactional email provider.
 
 ---
 
@@ -166,15 +164,13 @@ browser still has the cookie.
 
 ```
 SESSION_SECRET env var
-  → falls back to AUTH_PASSWORD
   → falls back to data/.session-secret (auto-generated, persisted)
 ```
 
 Resolution order:
 
 1. `SESSION_SECRET` env var (explicit, highest priority).
-2. `AUTH_PASSWORD` env var (for backwards compatibility).
-3. `data/.session-secret` — a random 64-byte hex string generated once on
+2. `data/.session-secret` — a random 64-byte hex string generated once on
    first startup and written to the data directory. Since `data/` is on a
    persistent volume (Railway mount or Codespaces /workspaces), this file
    survives redeploys. Sessions remain valid across restarts without
@@ -183,7 +179,6 @@ Resolution order:
 ```js
 function getSessionSecret() {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
-  if (process.env.AUTH_PASSWORD) return process.env.AUTH_PASSWORD;
   const secretFile = join(DATA_DIR, '.session-secret');
   try {
     return readFileSync(secretFile, 'utf8').trim();
@@ -206,10 +201,8 @@ The `requireAuth` middleware:
 5. Looks up the user in `users.json` and verifies `passwordVersion` matches.
 6. Sets `req.user = { id, displayName, role }` on the request object.
 
-If `users.json` doesn't exist and no `AUTH_PASSWORD` is set, the middleware
-redirects to `/setup` so the admin can create the first account. If
-`AUTH_PASSWORD` is set without `users.json`, it falls back to legacy
-single-password mode and sets `req.user = null`.
+If `users.json` doesn't exist, the middleware redirects to `/setup` so the
+admin can create the first account.
 
 ---
 
@@ -221,8 +214,6 @@ Every KV key is transparently prefixed with the user ID on the server side:
 
 ```js
 function resolveKey(req, key) {
-  // Legacy mode (no users.json): no prefix
-  if (!req.user) return key;
   return `u_${req.user.id}_${key}`;
 }
 ```
@@ -358,8 +349,8 @@ key behavior without confirming with the project owner first.
 
 | Method | Path | Change |
 |--------|------|--------|
-| `GET` | `/login` | Adds a username field above the password field. If no `users.json` exists, renders the old single-password form. |
-| `POST` | `/api/login` | Accepts `{ username, password }`, looks up user, verifies hash, sets user-scoped session cookie. Falls back to old behavior without `users.json`. |
+| `GET` | `/login` | Shows email + password form. Redirects to `/setup` if no `users.json` exists. |
+| `POST` | `/api/login` | Accepts `{ email, password }`, looks up user, verifies hash, sets user-scoped session cookie. Returns error if no users configured. |
 | `GET/PUT/DELETE` | `/api/kv/:key` | Key is passed through `resolveKey(req, key)` to add user prefix. |
 | `DELETE` | `/api/books/:hash` | All file paths prefixed with user namespace. |
 | `POST` | `/api/claude` | Unchanged — uses `claude-agent-sdk` with server owner's OAuth credentials. |
@@ -454,7 +445,7 @@ For existing deployments that already have data:
 
 | Step | What happens |
 |------|-------------|
-| 1 | New code deploys. No `users.json` exists → **legacy mode** (single-password, no key prefix). Everything works as before. |
+| 1 | New code deploys. No `users.json` exists → app redirects all routes to `/setup`. |
 | 2 | Admin visits `/setup` and creates the first account. |
 | 3 | The `POST /api/setup` handler migrates existing data using a **copy-then-delete** strategy (see below). |
 | 4 | The admin's existing books, progress, illustrations — everything — are now under their namespace. |
@@ -489,8 +480,8 @@ during Phase C, some originals remain alongside their copies — harmless,
 since the app now reads from the prefixed versions.
 
 **Rollback:** Delete `users.json` and rename `u_{id}_*` files back to their
-original names (strip the `u_{id}_` prefix). The app reverts to
-single-password mode.
+original names (strip the `u_{id}_` prefix). The app will redirect to `/setup`
+to create a new admin account.
 
 ---
 
@@ -517,8 +508,8 @@ single-password mode.
 - Add `hashPassword(password, userId)` function
 - Implement new session token format: `userId:timestamp:hmac`
 - Update `requireAuth` middleware to parse new token and set `req.user`
-- Add legacy fallback: if no `users.json`, use current single-password auth
-- Update login page HTML to include a username field
+- Redirect to `/setup` when no `users.json` exists
+- Update login page HTML to include an email field
 - Add `GET /api/me` endpoint
 
 ### Phase 2: KV Namespacing (`server.js`)
@@ -568,4 +559,4 @@ No changes to `src/wordRecords.js`, `src/main.jsx`, `src/index.css`,
 7. **Member experience**: Upload a book as member, play a game — uses server-wide API keys
 8. **Cross-user isolation**: Switch back to admin — should NOT see member's book or progress
 9. **Account deletion**: Delete test account, verify `u_{id}_*.json` files are removed
-10. **Legacy mode**: Remove `users.json`, set `AUTH_PASSWORD` env var, confirm old single-password flow works
+10. **No-users state**: Remove `users.json`, confirm app redirects to `/setup` and API returns 401

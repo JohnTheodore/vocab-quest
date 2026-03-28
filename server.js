@@ -2,14 +2,13 @@
  * Vocabulary Quest — API Server
  *
  * Multi-user authentication:
- *   When data/users.json exists, each user logs in with a username + password.
- *   Sessions are HMAC-signed cookies (userId:timestamp:hmac). All KV data is
- *   namespaced per user (u_{userId}_{key}) for full isolation — each user has
- *   their own books, illustrations, vocabulary progress, and review history.
+ *   Each user logs in with email + password. Sessions are HMAC-signed cookies
+ *   (userId:timestamp:passwordVersion:hmac). All KV data is namespaced per
+ *   user (u_{userId}_{key}) for full isolation — each user has their own
+ *   books, illustrations, vocabulary progress, and review history.
  *
- *   When data/users.json does NOT exist (legacy mode), the app falls back to
- *   single-password auth via AUTH_PASSWORD env var, with no KV namespacing.
- *   This preserves backwards compatibility for existing deployments.
+ *   When data/users.json does not exist, the app redirects to /setup to
+ *   create the initial admin account.
  *
  * Claude calls: proxied through @anthropic-ai/claude-agent-sdk, which uses
  *   credentials from `claude login` (~/.claude/.credentials.json).
@@ -63,24 +62,14 @@ mkdirSync(DATA_DIR, { recursive: true });
 const USERS_FILE = join(DATA_DIR, 'users.json');
 const BOOK_INDEX_KEY = 'vocab-books-index';
 
-// ── Legacy single-password auth (used when users.json does not exist) ────────
-// When AUTH_PASSWORD is set and no users.json exists, the app uses the original
-// single-password gate. This is "legacy mode" — preserved for backwards compat.
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
-const LEGACY_AUTH_TOKEN = AUTH_PASSWORD
-  ? crypto.createHmac('sha256', AUTH_PASSWORD).update('vocab-quest').digest('hex')
-  : null;
-
 // ── Session secret ───────────────────────────────────────────────────────────
-// Used to HMAC-sign multi-user session cookies. Resolution order:
+// Used to HMAC-sign session cookies. Resolution order:
 //   1. SESSION_SECRET env var (explicit, highest priority)
-//   2. AUTH_PASSWORD env var (backwards compat with existing deployments)
-//   3. data/.session-secret — auto-generated random secret, persisted to disk
+//   2. data/.session-secret — auto-generated random secret, persisted to disk
 //      so it survives Railway redeploys and Codespace restarts without any
 //      env var configuration. Sessions remain valid across server restarts.
 function getSessionSecret() {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
-  if (AUTH_PASSWORD) return AUTH_PASSWORD;
   const secretFile = join(DATA_DIR, '.session-secret');
   try {
     return readFileSync(secretFile, 'utf8').trim();
@@ -99,7 +88,7 @@ const SESSION_SECRET = getSessionSecret();
 // a server restart.
 
 /**
- * Load all users from disk. Returns null if users.json doesn't exist (legacy mode).
+ * Load all users from disk. Returns null if users.json doesn't exist yet.
  * Returns the parsed {userId: profile} object otherwise.
  */
 function loadUsers() {
@@ -208,57 +197,36 @@ function parseCookies(req) {
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
-// Supports two modes:
-//   1. Multi-user mode (users.json exists): parse the structured session token,
-//      verify the HMAC, look up the user, and set req.user.
-//   2. Legacy mode (no users.json): compare the cookie against the single
-//      LEGACY_AUTH_TOKEN derived from AUTH_PASSWORD. Sets req.user = null.
-//
-// If auth is disabled entirely (no users.json AND no AUTH_PASSWORD), all
-// requests pass through with req.user = null. This is for local dev only.
+// Parses the session token, verifies the HMAC and passwordVersion, and sets
+// req.user. If no users.json exists yet, redirects to /setup.
 function requireAuth(req, res, next) {
   const users = loadUsers();
-  const token = parseCookies(req)['vq_session'] || '';
 
-  if (users) {
-    // ── Multi-user mode ──────────────────────────────────────────────────
-    const session = verifySessionToken(token);
-    if (!session || !users[session.userId]) {
-      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
-      return res.redirect('/login');
-    }
-    const u = users[session.userId];
-    // Reject sessions from before a password change
-    if ((u.passwordVersion || 1) !== session.passwordVersion) {
-      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired — please log in again' } });
-      return res.redirect('/login');
-    }
-    req.user = { id: session.userId, displayName: u.displayName, role: u.role };
-    return next();
-  }
-
-  // ── Legacy mode (single password) ────────────────────────────────────────
-  if (!LEGACY_AUTH_TOKEN) {
-    // No auth configured at all — redirect to setup so the admin can create an account
+  if (!users) {
+    // No users configured yet — redirect to setup
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'No users configured. Visit /setup to create an admin account.' } });
     return res.redirect('/setup');
   }
-  // Compare the cookie against the legacy single-password token using
-  // timingSafeEqual to prevent timing attacks.
-  const a = Buffer.from(token);
-  const b = Buffer.from(LEGACY_AUTH_TOKEN);
-  if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-    req.user = null; // Legacy mode — no user identity
-    return next();
+
+  const token = parseCookies(req)['vq_session'] || '';
+  const session = verifySessionToken(token);
+  if (!session || !users[session.userId]) {
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
+    return res.redirect('/login');
   }
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
-  res.redirect('/login');
+  const u = users[session.userId];
+  // Reject sessions from before a password change
+  if ((u.passwordVersion || 1) !== session.passwordVersion) {
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Session expired — please log in again' } });
+    return res.redirect('/login');
+  }
+  req.user = { id: session.userId, displayName: u.displayName, role: u.role };
+  next();
 }
 
 // ── KV key namespacing ───────────────────────────────────────────────────────
-// In multi-user mode, every KV key is prefixed with "u_{userId}_" so each
-// user's data is fully isolated. In legacy mode (req.user === null), keys
-// are used as-is — no prefix. This means the frontend is completely unaware
+// Every KV key is prefixed with "u_{userId}_" so each user's data is fully
+// isolated. The frontend is completely unaware
 // of namespacing; it requests "vocab-quest-data" and the server silently
 // maps it to "u_emma_vocab-quest-data" based on the session.
 
@@ -274,12 +242,10 @@ function isValidEmail(str) {
 
 /**
  * Resolve a KV key to its namespaced filename (without .json extension).
- * In multi-user mode: prefixes with "u_{userId}_".
- * In legacy mode: returns the key unchanged.
+ * Prefixes with "u_{userId}_" for per-user data isolation.
  */
 function resolveKey(req, key) {
   const sanitized = sanitizeKey(key);
-  if (!req.user) return sanitized; // Legacy mode — no prefix
   return `u_${sanitizeKey(req.user.id)}_${sanitized}`;
 }
 
@@ -356,6 +322,9 @@ const authLimiter = rateLimit({
 });
 
 const app = express();
+// Trust the first reverse proxy (Railway's load balancer) so that
+// express-rate-limit sees the real client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
 // Security headers (X-Frame-Options, HSTS, nosniff, etc.). CSP is disabled
 // because the app uses inline styles, CDN scripts (JSZip), Google Fonts, and
 // base64 data-URI images — all of which conflict with a strict CSP. The other
@@ -498,20 +467,14 @@ app.post('/api/setup', authLimiter, (req, res) => {
 });
 
 // ── Login page & logout (exempt from auth) ────────────────────────────────────
-// Renders differently depending on mode:
-//   - Multi-user mode (users.json exists): shows username + password fields
-//   - Legacy mode (no users.json): shows password-only field (original behavior)
-//   - No auth at all: redirects to / (nothing to log in to)
 
 app.get('/login', (_req, res) => {
   const users = loadUsers();
 
   // No users yet — redirect to first-time setup
-  if (!users && !AUTH_PASSWORD) return res.redirect('/setup');
+  if (!users) return res.redirect('/setup');
 
-  // If multi-user is active, show the full login form with email field
-  if (users) {
-    return res.send(`<!DOCTYPE html>
+  res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -530,76 +493,39 @@ app.get('/login', (_req, res) => {
   </form>
 </body>
 </html>`);
-  }
-
-  // Legacy mode: password-only login (original behavior)
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vocab Quest — Login</title>
-  <style>${LOGIN_STYLES}</style>
-</head>
-<body>
-  <form method="POST" action="/api/login">
-    <h1>Vocab Quest</h1>
-    <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
-    <button type="submit">Enter</button>
-    ${res.locals.error ? `<p class="error">${res.locals.error}</p>` : ''}
-  </form>
-</body>
-</html>`);
 });
 
 app.post('/api/login', authLimiter, (req, res) => {
   const { email, password } = req.body;
   const users = loadUsers();
 
-  if (users) {
-    // ── Multi-user login ─────────────────────────────────────────────────
-    // Look up the user by email, verify the scrypt hash, and issue a
-    // signed session token. The email is sanitized to match the key
-    // format in users.json (lowercase, safe characters only).
-    const trimmedEmail = (email || '').trim().toLowerCase();
-    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
-      res.locals.error = 'Incorrect email or password';
-      res.status(401);
-      return app.handle({ ...req, method: 'GET', url: '/login' }, res);
-    }
-    const userId = sanitizeKey(trimmedEmail);
-    const user = users[userId];
-    // Always compute hash to avoid leaking whether user exists via timing
-    const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
-    const storedHash = user?.passwordHash || '';
-    const a = Buffer.from(computedHash);
-    const b = Buffer.from(storedHash);
-    if (!user || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      res.locals.error = 'Incorrect email or password';
-      res.status(401);
-      return app.handle({ ...req, method: 'GET', url: '/login' }, res);
-    }
-
-    const token = createSessionToken(userId, user.passwordVersion || 1);
-    res.setHeader('Set-Cookie', sessionCookie(token));
-    return res.redirect('/');
+  if (!users) {
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'No users configured' } });
+    return res.redirect('/setup');
   }
 
-  // ── Legacy login (single password) ───────────────────────────────────────
-  const token = LEGACY_AUTH_TOKEN
-    ? crypto.createHmac('sha256', password || '').update('vocab-quest').digest('hex')
-    : null;
-
-  if (!LEGACY_AUTH_TOKEN || token === LEGACY_AUTH_TOKEN) {
-    // Secure flag ensures the cookie is only sent over HTTPS, preventing
-    // leakage if someone hits an HTTP URL. Omitted in dev (localhost is HTTP).
-    res.setHeader('Set-Cookie', sessionCookie(LEGACY_AUTH_TOKEN));
-    return res.redirect('/');
+  const trimmedEmail = (email || '').trim().toLowerCase();
+  if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
+    res.locals.error = 'Incorrect email or password';
+    res.status(401);
+    return app.handle({ ...req, method: 'GET', url: '/login' }, res);
+  }
+  const userId = sanitizeKey(trimmedEmail);
+  const user = users[userId];
+  // Always compute hash to avoid leaking whether user exists via timing
+  const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
+  const storedHash = user?.passwordHash || '';
+  const a = Buffer.from(computedHash);
+  const b = Buffer.from(storedHash);
+  if (!user || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    res.locals.error = 'Incorrect email or password';
+    res.status(401);
+    return app.handle({ ...req, method: 'GET', url: '/login' }, res);
   }
 
-  res.locals.error = 'Incorrect password';
-  res.status(401);
-  app.handle({ ...req, method: 'GET', url: '/login' }, res);
+  const token = createSessionToken(userId, user.passwordVersion || 1);
+  res.setHeader('Set-Cookie', sessionCookie(token));
+  res.redirect('/');
 });
 
 app.post('/api/logout', (_req, res) => {
@@ -859,9 +785,8 @@ app.use(requireAuth);
 
 // ── GET /api/me — return the current user's profile ──────────────────────────
 // Used by the frontend to display the user's name, determine admin status,
-// and decide whether to show the admin panel. Returns null in legacy mode.
+// and decide whether to show the admin panel.
 app.get('/api/me', (req, res) => {
-  if (!req.user) return res.json(null);
   res.json({
     id: req.user.id,
     displayName: req.user.displayName,
@@ -1248,7 +1173,7 @@ app.listen(PORT, () => {
   const users = loadUsers();
   const mode = users
     ? `multi-user (${Object.keys(users).length} accounts)`
-    : AUTH_PASSWORD ? 'single-password (legacy)' : 'disabled (set AUTH_PASSWORD or run /setup)';
+    : 'no users (visit /setup to create admin account)';
   console.log(`Vocab Quest API server running on http://localhost:${PORT}`);
   console.log(`Auth: ${mode}`);
   console.log(`Claude: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'using CLAUDE_CODE_OAUTH_TOKEN env var' : 'using ~/.claude/.credentials.json'}`);
