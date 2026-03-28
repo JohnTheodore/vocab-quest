@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup A: Ring Summary (Duolingo-inspired)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f0f1a;
+    color: #e8e8f0;
+    max-width: 420px;
+    margin: 0 auto;
+    min-height: 100vh;
+    padding: 0 0 40px 0;
+  }
+
+  /* === ACTION BANNER === */
+  .action-banner {
+    background: linear-gradient(135deg, #2d7a4f, #1a5c3a);
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .action-banner:hover { filter: brightness(1.1); }
+  .banner-left { display: flex; align-items: center; gap: 12px; }
+  .banner-icon { font-size: 24px; }
+  .banner-text { font-size: 15px; font-weight: 600; }
+  .banner-sub { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+  .banner-arrow { font-size: 20px; opacity: 0.7; }
+
+  /* === RINGS SECTION === */
+  .rings-section {
+    padding: 28px 20px 20px;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+  }
+  .ring-item { text-align: center; }
+  .ring-container {
+    position: relative;
+    width: 90px;
+    height: 90px;
+  }
+  .ring-container svg { transform: rotate(-90deg); }
+  .ring-bg { fill: none; stroke: #1a1a2e; stroke-width: 8; }
+  .ring-fill { fill: none; stroke-width: 8; stroke-linecap: round; transition: stroke-dashoffset 1s ease; }
+  .ring-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .ring-label {
+    font-size: 12px;
+    color: #8888aa;
+    margin-top: 8px;
+    font-weight: 500;
+  }
+
+  /* === MASTERY BAR === */
+  .mastery-section {
+    padding: 0 20px 24px;
+  }
+  .section-title {
+    font-size: 13px;
+    color: #8888aa;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .mastery-bar {
+    height: 28px;
+    border-radius: 14px;
+    overflow: hidden;
+    display: flex;
+    background: #1a1a2e;
+  }
+  .mastery-segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(0,0,0,0.7);
+    transition: width 0.8s ease;
+  }
+  .seg-new { background: #555570; color: rgba(255,255,255,0.6); }
+  .seg-learning { background: #e8834a; }
+  .seg-familiar { background: #f0c642; }
+  .seg-mastered { background: #4ade80; }
+  .mastery-legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #8888aa;
+  }
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  /* === WEEKLY ACTIVITY === */
+  .weekly-section {
+    padding: 0 20px 24px;
+  }
+  .week-dots {
+    display: flex;
+    gap: 8px;
+  }
+  .day-col { text-align: center; flex: 1; }
+  .day-dot {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    background: #1a1a2e;
+    margin-bottom: 4px;
+  }
+  .day-dot.active { background: #4ade80; }
+  .day-dot.today { background: #2d7a4f; border: 2px solid #4ade80; }
+  .day-label { font-size: 10px; color: #555570; }
+
+  /* === WORD LIST === */
+  .words-section {
+    padding: 0 20px;
+  }
+  .word-card {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .word-left { display: flex; align-items: center; gap: 12px; }
+  .word-mastery-dots {
+    display: flex;
+    gap: 3px;
+  }
+  .mastery-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #333350;
+  }
+  .mastery-dot.filled { background: #4ade80; }
+  .mastery-dot.partial { background: #f0c642; }
+  .mastery-dot.learning { background: #e8834a; }
+  .word-text {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .word-book {
+    font-size: 11px;
+    color: #555570;
+    margin-top: 2px;
+  }
+  .word-next-review {
+    font-size: 11px;
+    color: #555570;
+  }
+  .word-overdue {
+    color: #e8834a;
+    font-weight: 600;
+  }
+
+  /* === SEARCH === */
+  .search-bar {
+    background: #1a1a2e;
+    border: 1px solid #2a2a40;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #e8e8f0;
+    font-size: 14px;
+    width: 100%;
+    margin-bottom: 16px;
+    outline: none;
+  }
+  .search-bar::placeholder { color: #555570; }
+
+  /* === FILTER CHIPS === */
+  .filter-chips {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .chip {
+    background: #1a1a2e;
+    border: 1px solid #2a2a40;
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: #8888aa;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .chip.active {
+    background: #2d7a4f;
+    border-color: #4ade80;
+    color: #e8e8f0;
+  }
+
+  /* === EXPANDED WORD === */
+  .word-expanded {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 8px;
+    border: 1px solid #2a2a40;
+  }
+  .word-expanded-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .word-expanded .word-text { font-size: 18px; }
+  .word-context {
+    font-size: 13px;
+    color: #aaaacc;
+    line-height: 1.5;
+    padding: 10px 14px;
+    background: #12121e;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    border-left: 3px solid #2d7a4f;
+  }
+  .word-context em { color: #4ade80; font-style: normal; font-weight: 600; }
+  .word-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: #555570;
+  }
+  .word-stats span { display: flex; align-items: center; gap: 4px; }
+
+  .header-bar {
+    padding: 16px 20px 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header-title { font-size: 22px; font-weight: 700; }
+  .header-icon { font-size: 20px; opacity: 0.5; }
+</style>
+</head>
+<body>
+
+<!-- ACTION BANNER -->
+<div class="action-banner">
+  <div class="banner-left">
+    <span class="banner-icon">&#9997;&#65039;</span>
+    <div>
+      <div class="banner-text">Practice 7 words</div>
+      <div class="banner-sub">3 overdue from The Hobbit</div>
+    </div>
+  </div>
+  <span class="banner-arrow">&#8250;</span>
+</div>
+
+<div class="header-bar">
+  <div class="header-title">My Words</div>
+  <span class="header-icon">&#9881;</span>
+</div>
+
+<!-- RINGS -->
+<div class="rings-section">
+  <div class="ring-item">
+    <div class="ring-container">
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle class="ring-bg" cx="45" cy="45" r="37"/>
+        <circle class="ring-fill" cx="45" cy="45" r="37"
+          stroke="#4ade80"
+          stroke-dasharray="232.5"
+          stroke-dashoffset="58"/>
+      </svg>
+      <div class="ring-center" style="color:#4ade80">47</div>
+    </div>
+    <div class="ring-label">Words Learned</div>
+  </div>
+  <div class="ring-item">
+    <div class="ring-container">
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle class="ring-bg" cx="45" cy="45" r="37"/>
+        <circle class="ring-fill" cx="45" cy="45" r="37"
+          stroke="#f0c642"
+          stroke-dasharray="232.5"
+          stroke-dashoffset="139"/>
+      </svg>
+      <div class="ring-center" style="color:#f0c642">3</div>
+    </div>
+    <div class="ring-label">Books</div>
+  </div>
+  <div class="ring-item">
+    <div class="ring-container">
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle class="ring-bg" cx="45" cy="45" r="37"/>
+        <circle class="ring-fill" cx="45" cy="45" r="37"
+          stroke="#818cf8"
+          stroke-dasharray="232.5"
+          stroke-dashoffset="100"/>
+      </svg>
+      <div class="ring-center" style="color:#818cf8">5</div>
+    </div>
+    <div class="ring-label">Day Streak</div>
+  </div>
+</div>
+
+<!-- MASTERY DISTRIBUTION -->
+<div class="mastery-section">
+  <div class="section-title">Mastery</div>
+  <div class="mastery-bar">
+    <div class="mastery-segment seg-new" style="width:12%">6</div>
+    <div class="mastery-segment seg-learning" style="width:25%">12</div>
+    <div class="mastery-segment seg-familiar" style="width:30%">14</div>
+    <div class="mastery-segment seg-mastered" style="width:33%">15</div>
+  </div>
+  <div class="mastery-legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#555570"></div>New</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e8834a"></div>Learning</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f0c642"></div>Familiar</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div>Mastered</div>
+  </div>
+</div>
+
+<!-- WEEKLY ACTIVITY -->
+<div class="weekly-section">
+  <div class="section-title">This Week</div>
+  <div class="week-dots">
+    <div class="day-col"><div class="day-dot active"></div><div class="day-label">M</div></div>
+    <div class="day-col"><div class="day-dot active"></div><div class="day-label">T</div></div>
+    <div class="day-col"><div class="day-dot"></div><div class="day-label">W</div></div>
+    <div class="day-col"><div class="day-dot active"></div><div class="day-label">T</div></div>
+    <div class="day-col"><div class="day-dot active"></div><div class="day-label">F</div></div>
+    <div class="day-col"><div class="day-dot"></div><div class="day-label">S</div></div>
+    <div class="day-col"><div class="day-dot today"></div><div class="day-label">S</div></div>
+  </div>
+</div>
+
+<!-- WORD LIST -->
+<div class="words-section">
+  <div class="section-title">All Words</div>
+  <input class="search-bar" type="text" placeholder="Search words..." disabled>
+  <div class="filter-chips">
+    <div class="chip active">All (47)</div>
+    <div class="chip">Overdue (7)</div>
+    <div class="chip">Learning (12)</div>
+    <div class="chip">Mastered (15)</div>
+  </div>
+
+  <!-- Expanded word example -->
+  <div class="word-expanded">
+    <div class="word-expanded-header">
+      <div>
+        <div class="word-text">ephemeral</div>
+        <div class="word-book">The Hobbit &middot; Ch. 3</div>
+      </div>
+      <div class="word-mastery-dots">
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot partial"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+      </div>
+    </div>
+    <div class="word-context">
+      "The <em>ephemeral</em> beauty of the elven lights faded as quickly as it had appeared, leaving only the memory of warmth."
+    </div>
+    <div class="word-stats">
+      <span>&#128197; Next: Tomorrow</span>
+      <span>&#9989; 3/4 first-try</span>
+      <span>&#128200; Familiar</span>
+    </div>
+  </div>
+
+  <!-- Regular word cards -->
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot learning"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+      </div>
+      <div>
+        <div class="word-text">treacherous</div>
+        <div class="word-book">The Hobbit &middot; Ch. 5</div>
+      </div>
+    </div>
+    <div class="word-next-review word-overdue">Overdue</div>
+  </div>
+
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+      </div>
+      <div>
+        <div class="word-text">plunder</div>
+        <div class="word-book">The Hobbit &middot; Ch. 1</div>
+      </div>
+    </div>
+    <div class="word-next-review">Apr 12</div>
+  </div>
+
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot partial"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+      </div>
+      <div>
+        <div class="word-text">melancholy</div>
+        <div class="word-book">A Wrinkle in Time &middot; Ch. 2</div>
+      </div>
+    </div>
+    <div class="word-next-review">Tomorrow</div>
+  </div>
+
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot partial"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+      </div>
+      <div>
+        <div class="word-text">conspicuous</div>
+        <div class="word-book">A Wrinkle in Time &middot; Ch. 4</div>
+      </div>
+    </div>
+    <div class="word-next-review word-overdue">Overdue</div>
+  </div>
+
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot filled"></div>
+        <div class="mastery-dot"></div>
+      </div>
+      <div>
+        <div class="word-text">luminous</div>
+        <div class="word-book">Percy Jackson &middot; Ch. 7</div>
+      </div>
+    </div>
+    <div class="word-next-review">Wed</div>
+  </div>
+
+  <div class="word-card">
+    <div class="word-left">
+      <div class="word-mastery-dots">
+        <div class="mastery-dot learning"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+        <div class="mastery-dot"></div>
+      </div>
+      <div>
+        <div class="word-text">formidable</div>
+        <div class="word-book">Percy Jackson &middot; Ch. 7</div>
+      </div>
+    </div>
+    <div class="word-next-review word-overdue">Overdue</div>
+  </div>
+</div>
+
+</body>
+</html>

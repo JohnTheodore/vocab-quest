@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup B: Book Shelf (Context-first)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f0f1a;
+    color: #e8e8f0;
+    max-width: 420px;
+    margin: 0 auto;
+    min-height: 100vh;
+    padding: 0 0 40px 0;
+  }
+
+  /* === ACTION BANNER === */
+  .action-banner {
+    background: linear-gradient(135deg, #2d7a4f, #1a5c3a);
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .banner-left { display: flex; align-items: center; gap: 12px; }
+  .banner-icon { font-size: 24px; }
+  .banner-text { font-size: 15px; font-weight: 600; }
+  .banner-sub { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+  .banner-arrow { font-size: 20px; opacity: 0.7; }
+
+  /* === HEADER === */
+  .header-bar {
+    padding: 20px 20px 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .header-title { font-size: 22px; font-weight: 700; }
+  .header-stat { font-size: 14px; color: #8888aa; }
+
+  /* === COMPACT SUMMARY === */
+  .summary-row {
+    display: flex;
+    padding: 16px 20px;
+    gap: 12px;
+  }
+  .summary-card {
+    flex: 1;
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+  .summary-number {
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .summary-label {
+    font-size: 11px;
+    color: #8888aa;
+    margin-top: 4px;
+  }
+
+  /* === MASTERY MINI BAR (inline with summary) === */
+  .mastery-mini {
+    padding: 0 20px 20px;
+  }
+  .mastery-bar {
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    background: #1a1a2e;
+  }
+  .seg-new { background: #555570; }
+  .seg-learning { background: #e8834a; }
+  .seg-familiar { background: #f0c642; }
+  .seg-mastered { background: #4ade80; }
+
+  /* === BOOK GROUP === */
+  .book-group {
+    margin: 0 20px 20px;
+    background: #1a1a2e;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .book-header {
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+    border-bottom: 1px solid #2a2a40;
+  }
+  .book-spine {
+    width: 8px;
+    height: 52px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .book-info { flex: 1; }
+  .book-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .book-meta {
+    font-size: 12px;
+    color: #8888aa;
+  }
+  .book-mastery-bar {
+    width: 60px;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    display: flex;
+    background: #0f0f1a;
+  }
+  .book-chevron {
+    font-size: 16px;
+    color: #555570;
+    margin-left: 8px;
+  }
+
+  /* === CHAPTER SUBGROUP === */
+  .chapter-header {
+    padding: 10px 16px;
+    font-size: 12px;
+    color: #8888aa;
+    background: #15152a;
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* === WORD ROW === */
+  .word-row {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #12121e;
+  }
+  .word-row:last-child { border-bottom: none; }
+  .word-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .word-text { font-size: 15px; font-weight: 500; }
+  .mastery-bar-small {
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: #0f0f1a;
+    overflow: hidden;
+  }
+  .mastery-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+  }
+  .word-detail {
+    font-size: 11px;
+    color: #555570;
+    text-align: right;
+  }
+  .word-detail.overdue { color: #e8834a; font-weight: 600; }
+
+  /* === WORD EXPANDED === */
+  .word-row-expanded {
+    padding: 12px 16px 16px;
+    background: #12121e;
+    border-bottom: 1px solid #1a1a2e;
+  }
+  .word-row-expanded .word-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .word-row-expanded .word-text { font-size: 17px; font-weight: 600; }
+  .context-quote {
+    font-size: 13px;
+    color: #aaaacc;
+    line-height: 1.6;
+    padding: 10px 14px;
+    background: #0f0f1a;
+    border-radius: 8px;
+    border-left: 3px solid #2d7a4f;
+    margin-bottom: 10px;
+  }
+  .context-quote em { color: #4ade80; font-style: normal; font-weight: 600; }
+  .word-meta-row {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #555570;
+  }
+
+  /* === COLLAPSED INDICATOR === */
+  .collapsed-group .book-header { border-bottom: none; }
+
+  /* === SEARCH === */
+  .search-container { padding: 0 20px 16px; }
+  .search-bar {
+    background: #1a1a2e;
+    border: 1px solid #2a2a40;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #e8e8f0;
+    font-size: 14px;
+    width: 100%;
+    outline: none;
+  }
+  .search-bar::placeholder { color: #555570; }
+</style>
+</head>
+<body>
+
+<!-- ACTION BANNER -->
+<div class="action-banner">
+  <div class="banner-left">
+    <span class="banner-icon">&#9997;&#65039;</span>
+    <div>
+      <div class="banner-text">Practice 7 words</div>
+      <div class="banner-sub">3 overdue from The Hobbit</div>
+    </div>
+  </div>
+  <span class="banner-arrow">&#8250;</span>
+</div>
+
+<div class="header-bar">
+  <div class="header-title">My Words</div>
+  <div class="header-stat">47 words &middot; 3 books</div>
+</div>
+
+<!-- COMPACT SUMMARY -->
+<div class="summary-row">
+  <div class="summary-card">
+    <div class="summary-number" style="color:#4ade80">15</div>
+    <div class="summary-label">Mastered</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-number" style="color:#f0c642">14</div>
+    <div class="summary-label">Familiar</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-number" style="color:#e8834a">12</div>
+    <div class="summary-label">Learning</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-number" style="color:#555570">6</div>
+    <div class="summary-label">New</div>
+  </div>
+</div>
+
+<!-- MASTERY BAR -->
+<div class="mastery-mini">
+  <div class="mastery-bar">
+    <div class="seg-mastered" style="width:33%"></div>
+    <div class="seg-familiar" style="width:30%"></div>
+    <div class="seg-learning" style="width:25%"></div>
+    <div class="seg-new" style="width:12%"></div>
+  </div>
+</div>
+
+<div class="search-container">
+  <input class="search-bar" type="text" placeholder="Search across all books..." disabled>
+</div>
+
+<!-- BOOK 1: THE HOBBIT (EXPANDED) -->
+<div class="book-group">
+  <div class="book-header">
+    <div class="book-spine" style="background: linear-gradient(to bottom, #2d7a4f, #1a5c3a);"></div>
+    <div class="book-info">
+      <div class="book-title">The Hobbit</div>
+      <div class="book-meta">22 words &middot; 4 chapters played</div>
+    </div>
+    <div class="book-mastery-bar">
+      <div class="seg-mastered" style="width:40%"></div>
+      <div class="seg-familiar" style="width:25%"></div>
+      <div class="seg-learning" style="width:25%"></div>
+      <div class="seg-new" style="width:10%"></div>
+    </div>
+    <div class="book-chevron">&#9660;</div>
+  </div>
+
+  <div class="chapter-header">
+    <span>Chapter 1: An Unexpected Party</span>
+    <span>6 words</span>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:100%; background:#4ade80;"></div>
+      </div>
+      <div class="word-text">plunder</div>
+    </div>
+    <div class="word-detail">Apr 12</div>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:100%; background:#4ade80;"></div>
+      </div>
+      <div class="word-text">audacious</div>
+    </div>
+    <div class="word-detail">Apr 8</div>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:60%; background:#f0c642;"></div>
+      </div>
+      <div class="word-text">bewilderment</div>
+    </div>
+    <div class="word-detail">Tomorrow</div>
+  </div>
+
+  <div class="chapter-header">
+    <span>Chapter 3: A Short Rest</span>
+    <span>5 words</span>
+  </div>
+
+  <!-- EXPANDED WORD -->
+  <div class="word-row-expanded">
+    <div class="word-header">
+      <div class="word-text">ephemeral</div>
+      <div class="mastery-bar-small" style="width:50px">
+        <div class="mastery-fill" style="width:50%; background:#f0c642;"></div>
+      </div>
+    </div>
+    <div class="context-quote">
+      "The <em>ephemeral</em> beauty of the elven lights faded as quickly as it had appeared, leaving only the memory of warmth."
+    </div>
+    <div class="word-meta-row">
+      <span>Next review: Tomorrow</span>
+      <span>3/4 first-try</span>
+      <span>Familiar</span>
+    </div>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:20%; background:#e8834a;"></div>
+      </div>
+      <div class="word-text">treacherous</div>
+    </div>
+    <div class="word-detail overdue">Overdue</div>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:80%; background:#4ade80;"></div>
+      </div>
+      <div class="word-text">resplendent</div>
+    </div>
+    <div class="word-detail">Apr 5</div>
+  </div>
+
+  <div class="chapter-header">
+    <span>Chapter 5: Riddles in the Dark</span>
+    <span>6 words</span>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:40%; background:#f0c642;"></div>
+      </div>
+      <div class="word-text">subterranean</div>
+    </div>
+    <div class="word-detail">Wed</div>
+  </div>
+
+  <div class="word-row">
+    <div class="word-left">
+      <div class="mastery-bar-small">
+        <div class="mastery-fill" style="width:0%; background:#555570;"></div>
+      </div>
+      <div class="word-text">pallid</div>
+    </div>
+    <div class="word-detail" style="color:#555570">New</div>
+  </div>
+</div>
+
+<!-- BOOK 2: A WRINKLE IN TIME (COLLAPSED) -->
+<div class="book-group collapsed-group">
+  <div class="book-header">
+    <div class="book-spine" style="background: linear-gradient(to bottom, #6366f1, #4338ca);"></div>
+    <div class="book-info">
+      <div class="book-title">A Wrinkle in Time</div>
+      <div class="book-meta">15 words &middot; 3 chapters played</div>
+    </div>
+    <div class="book-mastery-bar">
+      <div class="seg-mastered" style="width:30%"></div>
+      <div class="seg-familiar" style="width:35%"></div>
+      <div class="seg-learning" style="width:20%"></div>
+      <div class="seg-new" style="width:15%"></div>
+    </div>
+    <div class="book-chevron">&#9654;</div>
+  </div>
+</div>
+
+<!-- BOOK 3: PERCY JACKSON (COLLAPSED) -->
+<div class="book-group collapsed-group">
+  <div class="book-header">
+    <div class="book-spine" style="background: linear-gradient(to bottom, #e8834a, #c2410c);"></div>
+    <div class="book-info">
+      <div class="book-title">Percy Jackson: The Lightning Thief</div>
+      <div class="book-meta">10 words &middot; 2 chapters played</div>
+    </div>
+    <div class="book-mastery-bar">
+      <div class="seg-mastered" style="width:20%"></div>
+      <div class="seg-familiar" style="width:30%"></div>
+      <div class="seg-learning" style="width:30%"></div>
+      <div class="seg-new" style="width:20%"></div>
+    </div>
+    <div class="book-chevron">&#9654;</div>
+  </div>
+</div>
+
+</body>
+</html>

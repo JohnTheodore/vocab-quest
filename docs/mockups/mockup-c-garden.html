@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup C: Word Garden (Growth metaphor)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a1628;
+    color: #e8e8f0;
+    max-width: 420px;
+    margin: 0 auto;
+    min-height: 100vh;
+    padding: 0 0 40px 0;
+  }
+
+  /* === ACTION BANNER === */
+  .action-banner {
+    background: linear-gradient(135deg, #2d7a4f, #1a5c3a);
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .banner-left { display: flex; align-items: center; gap: 12px; }
+  .banner-icon { font-size: 24px; }
+  .banner-text { font-size: 15px; font-weight: 600; }
+  .banner-sub { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+  .banner-arrow { font-size: 20px; opacity: 0.7; }
+
+  /* === HEADER === */
+  .header-bar {
+    padding: 20px 20px 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .header-title { font-size: 22px; font-weight: 700; }
+  .header-stat { font-size: 13px; color: #6b8aad; }
+
+  /* === GARDEN OVERVIEW === */
+  .garden-overview {
+    padding: 20px;
+  }
+  .garden-ground {
+    background: linear-gradient(to bottom, #0a1628, #0f1f12, #1a2f1a);
+    border-radius: 20px;
+    padding: 24px 16px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .garden-ground::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 40px;
+    background: linear-gradient(to top, #1a2810, transparent);
+    border-radius: 0 0 20px 20px;
+  }
+
+  /* Plant grid */
+  .plant-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-bottom: 16px;
+  }
+  .plant-cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    font-size: 20px;
+    position: relative;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.2s;
+  }
+  .plant-cell:hover { background: rgba(255,255,255,0.05); }
+  .plant-cell .tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a2a3e;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    white-space: nowrap;
+    z-index: 10;
+    color: #e8e8f0;
+    border: 1px solid #2a3a4e;
+  }
+  .plant-cell:hover .tooltip { display: block; }
+
+  /* Plant stages */
+  .seed { font-size: 12px; opacity: 0.4; }
+  .sprout { font-size: 16px; }
+  .growing { font-size: 20px; }
+  .bloom { font-size: 24px; }
+  .wilting { font-size: 18px; filter: hue-rotate(40deg) saturate(0.5); animation: wilt 2s ease-in-out infinite; }
+  @keyframes wilt { 0%,100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+
+  /* Garden legend */
+  .garden-legend {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    padding: 12px 0 4px;
+    position: relative;
+    z-index: 1;
+    font-size: 11px;
+    color: #6b8aad;
+  }
+  .garden-legend span { display: flex; align-items: center; gap: 4px; }
+
+  /* === STATS ROW === */
+  .stats-row {
+    display: flex;
+    padding: 16px 20px;
+    gap: 10px;
+  }
+  .stat-pill {
+    flex: 1;
+    background: #111d30;
+    border: 1px solid #1a2a3e;
+    border-radius: 12px;
+    padding: 12px 10px;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: #6b8aad;
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* === NEEDS WATER (overdue) === */
+  .water-section {
+    padding: 0 20px 16px;
+  }
+  .section-title {
+    font-size: 13px;
+    color: #6b8aad;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .water-card {
+    background: #1a1a10;
+    border: 1px solid #3d3520;
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .water-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .water-plant { font-size: 22px; }
+  .water-word { font-size: 15px; font-weight: 500; }
+  .water-book { font-size: 11px; color: #6b8aad; margin-top: 2px; }
+  .water-days {
+    font-size: 11px;
+    color: #e8834a;
+    font-weight: 600;
+  }
+
+  /* === RECENTLY BLOOMED === */
+  .bloom-section {
+    padding: 0 20px 16px;
+  }
+  .bloom-card {
+    background: #101a10;
+    border: 1px solid #1a3a1a;
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .bloom-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .bloom-plant { font-size: 22px; }
+  .bloom-word { font-size: 15px; font-weight: 500; }
+  .bloom-book { font-size: 11px; color: #6b8aad; margin-top: 2px; }
+  .bloom-badge {
+    font-size: 11px;
+    color: #4ade80;
+    background: #0f2a0f;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+
+  /* === ALL WORDS === */
+  .all-section { padding: 0 20px; }
+  .search-bar {
+    background: #111d30;
+    border: 1px solid #1a2a3e;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #e8e8f0;
+    font-size: 14px;
+    width: 100%;
+    margin-bottom: 12px;
+    outline: none;
+  }
+  .search-bar::placeholder { color: #3a5070; }
+  .word-list-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #111d30;
+    gap: 10px;
+  }
+  .word-list-row:last-child { border-bottom: none; }
+  .wl-plant { font-size: 18px; width: 28px; text-align: center; }
+  .wl-info { flex: 1; }
+  .wl-word { font-size: 14px; font-weight: 500; }
+  .wl-book { font-size: 11px; color: #3a5070; }
+  .wl-status { font-size: 11px; color: #6b8aad; text-align: right; }
+  .wl-status.overdue { color: #e8834a; }
+
+  /* === EXPANDED WORD === */
+  .word-expanded {
+    background: #111d30;
+    border: 1px solid #1a2a3e;
+    border-radius: 12px;
+    padding: 16px;
+    margin: 8px 0;
+  }
+  .we-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .we-word { font-size: 17px; font-weight: 600; }
+  .we-plant { font-size: 28px; }
+  .we-context {
+    font-size: 13px;
+    color: #8ab0d0;
+    line-height: 1.6;
+    padding: 10px 14px;
+    background: #0a1628;
+    border-radius: 8px;
+    border-left: 3px solid #2d7a4f;
+    margin-bottom: 10px;
+  }
+  .we-context em { color: #4ade80; font-style: normal; font-weight: 600; }
+  .we-growth {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #6b8aad;
+    margin-bottom: 8px;
+  }
+  .growth-track {
+    flex: 1;
+    height: 6px;
+    background: #0a1628;
+    border-radius: 3px;
+    overflow: hidden;
+    display: flex;
+  }
+  .growth-stages {
+    display: flex;
+    width: 100%;
+  }
+  .growth-stage {
+    height: 6px;
+    flex: 1;
+    border-right: 2px solid #111d30;
+  }
+  .growth-stage:last-child { border-right: none; }
+  .gs-done { background: #4ade80; }
+  .gs-current { background: #f0c642; }
+  .gs-future { background: #1a2a3e; }
+  .we-meta {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #3a5070;
+  }
+</style>
+</head>
+<body>
+
+<!-- ACTION BANNER -->
+<div class="action-banner">
+  <div class="banner-left">
+    <span class="banner-icon">&#128167;</span>
+    <div>
+      <div class="banner-text">7 words need watering</div>
+      <div class="banner-sub">Don't let them wilt!</div>
+    </div>
+  </div>
+  <span class="banner-arrow">&#8250;</span>
+</div>
+
+<div class="header-bar">
+  <div class="header-title">Word Garden</div>
+  <div class="header-stat">47 plants growing</div>
+</div>
+
+<!-- GARDEN OVERVIEW -->
+<div class="garden-overview">
+  <div class="garden-ground">
+    <div class="plant-grid">
+      <!-- Row 1 -->
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">plunder</span></div>
+      <div class="plant-cell"><span class="bloom">&#127803;</span><span class="tooltip">audacious</span></div>
+      <div class="plant-cell"><span class="growing">&#127793;</span><span class="tooltip">ephemeral</span></div>
+      <div class="plant-cell"><span class="wilting">&#127795;</span><span class="tooltip">treacherous!</span></div>
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">luminous</span></div>
+      <div class="plant-cell"><span class="sprout">&#127793;</span><span class="tooltip">conspicuous</span></div>
+      <div class="plant-cell"><span class="bloom">&#127803;</span><span class="tooltip">meticulous</span></div>
+      <!-- Row 2 -->
+      <div class="plant-cell"><span class="growing">&#127794;</span><span class="tooltip">melancholy</span></div>
+      <div class="plant-cell"><span class="wilting">&#127795;</span><span class="tooltip">formidable!</span></div>
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">eloquent</span></div>
+      <div class="plant-cell"><span class="seed">&#128171;</span><span class="tooltip">pallid (new)</span></div>
+      <div class="plant-cell"><span class="growing">&#127793;</span><span class="tooltip">subterranean</span></div>
+      <div class="plant-cell"><span class="bloom">&#127803;</span><span class="tooltip">resplendent</span></div>
+      <div class="plant-cell"><span class="sprout">&#127793;</span><span class="tooltip">benevolent</span></div>
+      <!-- Row 3 -->
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">clandestine</span></div>
+      <div class="plant-cell"><span class="wilting">&#127795;</span><span class="tooltip">perpetual!</span></div>
+      <div class="plant-cell"><span class="growing">&#127794;</span><span class="tooltip">bewilderment</span></div>
+      <div class="plant-cell"><span class="bloom">&#127803;</span><span class="tooltip">ominous</span></div>
+      <div class="plant-cell"><span class="seed">&#128171;</span><span class="tooltip">pernicious (new)</span></div>
+      <div class="plant-cell"><span class="sprout">&#127793;</span><span class="tooltip">reticent</span></div>
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">vivacious</span></div>
+      <!-- Row 4 -->
+      <div class="plant-cell"><span class="growing">&#127793;</span><span class="tooltip">diminutive</span></div>
+      <div class="plant-cell"><span class="bloom">&#127803;</span><span class="tooltip">tenacious</span></div>
+      <div class="plant-cell"><span class="wilting">&#127795;</span><span class="tooltip">labyrinth!</span></div>
+      <div class="plant-cell"><span class="bloom">&#127800;</span><span class="tooltip">exquisite</span></div>
+      <div class="plant-cell"><span class="sprout">&#127793;</span><span class="tooltip">obstinate</span></div>
+      <div class="plant-cell"><span class="seed">&#128171;</span><span class="tooltip">surreptitious (new)</span></div>
+      <div class="plant-cell"><span class="growing">&#127794;</span><span class="tooltip">ineffable</span></div>
+    </div>
+    <div class="garden-legend">
+      <span>&#128171; Seed</span>
+      <span>&#127793; Sprout</span>
+      <span>&#127794; Growing</span>
+      <span>&#127800; Bloom</span>
+      <span style="filter: hue-rotate(40deg) saturate(0.5);">&#127795; Needs water</span>
+    </div>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat-pill">
+    <div class="stat-value" style="color:#4ade80">15</div>
+    <div class="stat-label">Blooming</div>
+  </div>
+  <div class="stat-pill">
+    <div class="stat-value" style="color:#f0c642">14</div>
+    <div class="stat-label">Growing</div>
+  </div>
+  <div class="stat-pill">
+    <div class="stat-value" style="color:#e8834a">12</div>
+    <div class="stat-label">Sprouts</div>
+  </div>
+  <div class="stat-pill">
+    <div class="stat-value" style="color:#888">6</div>
+    <div class="stat-label">Seeds</div>
+  </div>
+</div>
+
+<!-- NEEDS WATER -->
+<div class="water-section">
+  <div class="section-title">&#128167; Needs Watering</div>
+
+  <div class="water-card">
+    <div class="water-left">
+      <span class="water-plant" style="filter: hue-rotate(40deg) saturate(0.5);">&#127795;</span>
+      <div>
+        <div class="water-word">treacherous</div>
+        <div class="water-book">The Hobbit &middot; Ch. 3</div>
+      </div>
+    </div>
+    <div class="water-days">3 days late</div>
+  </div>
+
+  <div class="water-card">
+    <div class="water-left">
+      <span class="water-plant" style="filter: hue-rotate(40deg) saturate(0.5);">&#127795;</span>
+      <div>
+        <div class="water-word">formidable</div>
+        <div class="water-book">Percy Jackson &middot; Ch. 7</div>
+      </div>
+    </div>
+    <div class="water-days">2 days late</div>
+  </div>
+
+  <div class="water-card">
+    <div class="water-left">
+      <span class="water-plant" style="filter: hue-rotate(40deg) saturate(0.5);">&#127795;</span>
+      <div>
+        <div class="water-word">perpetual</div>
+        <div class="water-book">A Wrinkle in Time &middot; Ch. 4</div>
+      </div>
+    </div>
+    <div class="water-days">1 day late</div>
+  </div>
+</div>
+
+<!-- RECENTLY BLOOMED -->
+<div class="bloom-section">
+  <div class="section-title">&#127800; Recently Bloomed</div>
+
+  <div class="bloom-card">
+    <div class="bloom-left">
+      <span class="bloom-plant">&#127800;</span>
+      <div>
+        <div class="bloom-word">eloquent</div>
+        <div class="bloom-book">A Wrinkle in Time &middot; Ch. 2</div>
+      </div>
+    </div>
+    <div class="bloom-badge">Mastered!</div>
+  </div>
+
+  <div class="bloom-card">
+    <div class="bloom-left">
+      <span class="bloom-plant">&#127803;</span>
+      <div>
+        <div class="bloom-word">vivacious</div>
+        <div class="bloom-book">Percy Jackson &middot; Ch. 3</div>
+      </div>
+    </div>
+    <div class="bloom-badge">Mastered!</div>
+  </div>
+</div>
+
+<!-- ALL WORDS -->
+<div class="all-section">
+  <div class="section-title">All Plants</div>
+  <input class="search-bar" type="text" placeholder="Find a word..." disabled>
+
+  <!-- Expanded word -->
+  <div class="word-expanded">
+    <div class="we-header">
+      <div class="we-word">ephemeral</div>
+      <div class="we-plant">&#127793;</div>
+    </div>
+    <div class="we-context">
+      "The <em>ephemeral</em> beauty of the elven lights faded as quickly as it had appeared, leaving only the memory of warmth."
+    </div>
+    <div class="we-growth">
+      <span>Growth:</span>
+      <div class="growth-track">
+        <div class="growth-stages">
+          <div class="growth-stage gs-done"></div>
+          <div class="growth-stage gs-done"></div>
+          <div class="growth-stage gs-current"></div>
+          <div class="growth-stage gs-future"></div>
+          <div class="growth-stage gs-future"></div>
+        </div>
+      </div>
+      <span>&#127793; Growing</span>
+    </div>
+    <div class="we-meta">
+      <span>Next review: Tomorrow</span>
+      <span>3/4 first-try</span>
+      <span>The Hobbit Ch. 3</span>
+    </div>
+  </div>
+
+  <div class="word-list-row">
+    <div class="wl-plant">&#127800;</div>
+    <div class="wl-info"><div class="wl-word">plunder</div><div class="wl-book">The Hobbit &middot; Ch. 1</div></div>
+    <div class="wl-status">Apr 12</div>
+  </div>
+  <div class="word-list-row">
+    <div class="wl-plant">&#127803;</div>
+    <div class="wl-info"><div class="wl-word">audacious</div><div class="wl-book">The Hobbit &middot; Ch. 1</div></div>
+    <div class="wl-status">Apr 8</div>
+  </div>
+  <div class="word-list-row">
+    <div class="wl-plant">&#127794;</div>
+    <div class="wl-info"><div class="wl-word">melancholy</div><div class="wl-book">A Wrinkle in Time &middot; Ch. 2</div></div>
+    <div class="wl-status">Tomorrow</div>
+  </div>
+  <div class="word-list-row">
+    <div class="wl-plant" style="filter: hue-rotate(40deg) saturate(0.5);">&#127795;</div>
+    <div class="wl-info"><div class="wl-word">labyrinth</div><div class="wl-book">Percy Jackson &middot; Ch. 5</div></div>
+    <div class="wl-status overdue">Overdue</div>
+  </div>
+  <div class="word-list-row">
+    <div class="wl-plant">&#128171;</div>
+    <div class="wl-info"><div class="wl-word">surreptitious</div><div class="wl-book">The Hobbit &middot; Ch. 5</div></div>
+    <div class="wl-status" style="color:#3a5070">New</div>
+  </div>
+</div>
+
+</body>
+</html>
