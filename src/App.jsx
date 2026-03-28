@@ -816,6 +816,103 @@ const STYLES = `
   .app-title h1 { font-family: 'Source Serif 4', Georgia, serif; font-size: 28px; font-weight: 600; color: var(--gold); letter-spacing: 0.02em; }
   .app-title p { font-size: 13px; color: var(--gold-dim); opacity: 0.7; margin-top: 4px; font-style: normal; }
 
+  /* ── User bar (top-right, shows current user + logout) ──────────────── */
+  .user-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: var(--gold-dim);
+    opacity: 0.8;
+  }
+  .user-bar span { font-weight: 500; }
+  .user-bar a, .user-bar button.link-btn {
+    color: var(--gold-dim);
+    text-decoration: none;
+    opacity: 0.7;
+    cursor: pointer;
+    background: none;
+    border: none;
+    font: inherit;
+    padding: 0;
+  }
+  .user-bar a:hover, .user-bar button.link-btn:hover { opacity: 1; text-decoration: underline; }
+
+  /* ── Admin panel ────────────────────────────────────────────────────── */
+  .admin-panel {
+    max-width: 500px;
+    margin: 0 auto 32px;
+    padding: 20px;
+    border: 1px solid rgba(180,130,50,0.2);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+  }
+  .admin-panel h2 {
+    font-size: 16px;
+    color: var(--gold);
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+  .admin-panel .user-list {
+    list-style: none;
+    margin-bottom: 16px;
+  }
+  .admin-panel .user-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(180,130,50,0.1);
+    font-size: 14px;
+    color: var(--text);
+  }
+  .admin-panel .user-list li:last-child { border-bottom: none; }
+  .admin-panel .user-role {
+    font-size: 11px;
+    color: var(--gold-dim);
+    opacity: 0.6;
+    margin-left: 8px;
+  }
+  .admin-panel .delete-btn {
+    background: none;
+    border: 1px solid rgba(224,112,112,0.3);
+    color: #e07070;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .admin-panel .delete-btn:hover { background: rgba(224,112,112,0.1); }
+  .admin-panel .add-user-form {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .admin-panel .add-user-form input {
+    flex: 1;
+    min-width: 100px;
+    padding: 7px 10px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(180,130,50,0.3);
+    border-radius: 4px;
+    color: #e8d5a0;
+    font-size: 13px;
+  }
+  .admin-panel .add-user-form button {
+    padding: 7px 14px;
+    background: rgba(180,130,50,0.15);
+    border: 1px solid rgba(180,130,50,0.4);
+    border-radius: 4px;
+    color: #d4b04a;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .admin-panel .add-user-form button:hover { background: rgba(180,130,50,0.25); }
+  .admin-panel .admin-error { color: #e07070; font-size: 13px; margin-top: 8px; }
+  .admin-panel .admin-success { color: #70c070; font-size: 13px; margin-top: 8px; }
+
   .card {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -3118,6 +3215,84 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
 }
 
 // ── Root App ──────────────────────────────────────────────────────────────────
+// ── Admin panel — manage family/friend accounts ──────────────────────────────
+// Visible only to admin users. Lists all accounts with the ability to add new
+// members or delete existing ones. Communicates with GET/POST/DELETE /api/users.
+function AdminPanel({ currentUser, onClose }) {
+  const [users, setUsers] = useState([]);
+  const [newId, setNewId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  // Fetch the user list on mount
+  useEffect(() => {
+    fetch("/api/users").then(r => r.json()).then(setUsers).catch(() => {});
+  }, []);
+
+  // Create a new user account
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    setError(""); setSuccess("");
+    if (!newId.trim() || !newPass.trim()) { setError("Username and password are required"); return; }
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: newId.trim(), displayName: newName.trim() || newId.trim(), password: newPass }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error?.message || "Failed to create user"); return; }
+      setSuccess(`User "${newId.trim()}" created`);
+      setNewId(""); setNewName(""); setNewPass("");
+      // Refresh the user list
+      const updated = await fetch("/api/users").then(r => r.json());
+      setUsers(updated);
+    } catch { setError("Network error"); }
+  };
+
+  // Delete a user (with confirmation)
+  const handleDelete = async (userId) => {
+    if (!confirm(`Delete user "${userId}" and all their data? This cannot be undone.`)) return;
+    setError(""); setSuccess("");
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error?.message || "Failed to delete user"); return; }
+      setSuccess(`User "${userId}" deleted`);
+      setUsers(u => u.filter(x => x.id !== userId));
+    } catch { setError("Network error"); }
+  };
+
+  return (
+    <div className="admin-panel">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h2>Manage Users</h2>
+        <button className="link-btn" onClick={onClose} style={{ color: "var(--gold-dim)", background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>Close</button>
+      </div>
+      <ul className="user-list">
+        {users.map(u => (
+          <li key={u.id}>
+            <span>{u.displayName}<span className="user-role">{u.role}</span></span>
+            {u.id !== currentUser.id && (
+              <button className="delete-btn" onClick={() => handleDelete(u.id)}>Delete</button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <form className="add-user-form" onSubmit={handleAdd}>
+        <input placeholder="Username" value={newId} onChange={e => setNewId(e.target.value)} />
+        <input placeholder="Display name" value={newName} onChange={e => setNewName(e.target.value)} />
+        <input placeholder="Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} />
+        <button type="submit">Add User</button>
+      </form>
+      {error && <div className="admin-error">{error}</div>}
+      {success && <div className="admin-success">{success}</div>}
+    </div>
+  );
+}
+
 export default function App() {
   // upload → bible → chapters → suggest → generating → game → results
   // review-loading → review-game → review-results (parallel review flow)
@@ -3137,17 +3312,52 @@ export default function App() {
   // after completing a review or chapter session).
   const [uploadKey, setUploadKey] = useState(0);
 
+  // ── Multi-user state ─────────────────────────────────────────────────
+  // Fetches the current user's profile from GET /api/me on mount. Returns
+  // null in legacy mode (single-password auth). Used to display the user's
+  // name, show the admin panel, and gate admin-only features.
+  const [currentUser, setCurrentUser] = useState(null);
+  const [showAdmin, setShowAdmin] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then(r => r.ok ? r.json() : null)
+      .then(setCurrentUser)
+      .catch(() => {});
+  }, []);
+
   return (
     <>
       <style>{STYLES}</style>
       {/* game-active class tightens spacing so the question card fits without scrolling on a tablet */}
       <div className={`app${phase === "game" || phase === "review-game" ? " game-active" : ""}`}>
+
+        {/* ── User bar: shows current user, admin link, and logout ──────── */}
+        {/* Hidden during game phases to maximize screen space for the card. */}
+        {/* Only rendered in multi-user mode (currentUser !== null).         */}
+        {currentUser && phase !== "game" && phase !== "review-game" && (
+          <div className="user-bar">
+            <span>Hi, {currentUser.displayName}</span>
+            {currentUser.role === "admin" && (
+              <button className="link-btn" onClick={() => setShowAdmin(s => !s)}>
+                {showAdmin ? "Hide Admin" : "Admin"}
+              </button>
+            )}
+            <a href="/api/logout">Log out</a>
+          </div>
+        )}
+
         {/* Hide the title on the question page — it wastes vertical space needed to fit the card */}
         {phase !== "game" && phase !== "review-game" && (
           <div className="app-title">
             <h1>Vocabulary Quest</h1>
             <p>Learn words from the books you love</p>
           </div>
+        )}
+
+        {/* ── Admin panel: manage family/friend accounts ────────────────── */}
+        {showAdmin && currentUser?.role === "admin" && (
+          <AdminPanel currentUser={currentUser} onClose={() => setShowAdmin(false)} />
         )}
 
         {phase === "upload" && (

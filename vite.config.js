@@ -12,6 +12,9 @@ export default defineConfig({
         proxyTimeout: 120000,  // 2 min — Claude API calls can be slow
         timeout: 120000,
       },
+      // Proxy auth pages to Express (server-rendered HTML)
+      '/setup': { target: 'http://localhost:3001', changeOrigin: true },
+      '/login': { target: 'http://localhost:3001', changeOrigin: true },
     },
   },
 })

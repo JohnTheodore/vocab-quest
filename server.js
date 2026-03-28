@@ -1,11 +1,19 @@
 /**
  * Vocabulary Quest — API Server
  *
+ * Multi-user authentication:
+ *   When data/users.json exists, each user logs in with a username + password.
+ *   Sessions are HMAC-signed cookies (userId:timestamp:hmac). All KV data is
+ *   namespaced per user (u_{userId}_{key}) for full isolation — each user has
+ *   their own books, illustrations, vocabulary progress, and review history.
+ *
+ *   When data/users.json does NOT exist (legacy mode), the app falls back to
+ *   single-password auth via AUTH_PASSWORD env var, with no KV namespacing.
+ *   This preserves backwards compatibility for existing deployments.
+ *
  * Claude calls: proxied through @anthropic-ai/claude-agent-sdk, which uses
  *   credentials from `claude login` (~/.claude/.credentials.json).
  * Gemini calls: proxied using GEMINI_API_KEY from .env.
- * Auth: cookie-based password gate, active only when AUTH_PASSWORD is set.
- *   Login is rate-limited (express-rate-limit) to prevent brute-force attacks.
  *
  * Run alongside Vite: npm run dev
  * Or standalone:      npm run server
@@ -13,10 +21,10 @@
 
 import express from 'express';
 import helmet from 'helmet';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, constants } from 'fs';
+import crypto from 'crypto';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, constants, readdirSync, copyFileSync, unlinkSync, statSync } from 'fs';
 import { resolve, join } from 'path';
 import { unlink, access } from 'fs/promises';
-import { createHmac, createHash, timingSafeEqual } from 'crypto';
 import { spawn } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import rateLimit from 'express-rate-limit';
@@ -41,13 +49,139 @@ if (!GEMINI_KEY) {
   console.warn('WARNING: GEMINI_API_KEY is not set in .env — image generation will be unavailable');
 }
 
+// ── Data directory ───────────────────────────────────────────────────────────
+// In Codespaces, ./data/ persists inside /workspaces/ across stops/starts.
+// On Railway, DATA_DIR should point to a mounted volume (e.g. /data).
+const DATA_DIR = resolve(process.cwd(), process.env.DATA_DIR || 'data');
+mkdirSync(DATA_DIR, { recursive: true });
+
+const USERS_FILE = join(DATA_DIR, 'users.json');
+const BOOK_INDEX_KEY = 'vocab-books-index';
+
+// ── Legacy single-password auth (used when users.json does not exist) ────────
+// When AUTH_PASSWORD is set and no users.json exists, the app uses the original
+// single-password gate. This is "legacy mode" — preserved for backwards compat.
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
-// Stateless session token derived from the password — no session store needed
-const AUTH_TOKEN = AUTH_PASSWORD
-  ? createHmac('sha256', AUTH_PASSWORD).update('vocab-quest').digest('hex')
+const LEGACY_AUTH_TOKEN = AUTH_PASSWORD
+  ? crypto.createHmac('sha256', AUTH_PASSWORD).update('vocab-quest').digest('hex')
   : null;
 
-// ── Cookie helpers ────────────────────────────────────────────────────────────
+// ── Session secret ───────────────────────────────────────────────────────────
+// Used to HMAC-sign multi-user session cookies. Resolution order:
+//   1. SESSION_SECRET env var (explicit, highest priority)
+//   2. AUTH_PASSWORD env var (backwards compat with existing deployments)
+//   3. data/.session-secret — auto-generated random secret, persisted to disk
+//      so it survives Railway redeploys and Codespace restarts without any
+//      env var configuration. Sessions remain valid across server restarts.
+function getSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  if (AUTH_PASSWORD) return AUTH_PASSWORD;
+  const secretFile = join(DATA_DIR, '.session-secret');
+  try {
+    return readFileSync(secretFile, 'utf8').trim();
+  } catch {
+    const secret = crypto.randomBytes(64).toString('hex');
+    writeFileSync(secretFile, secret, 'utf8');
+    return secret;
+  }
+}
+const SESSION_SECRET = getSessionSecret();
+
+// ── User management helpers ──────────────────────────────────────────────────
+// Users are stored as a JSON object in data/users.json, mapping userId to
+// profile. The file is read on every auth check (cheap for <100 users) to
+// ensure changes (new accounts, deletions) take effect immediately without
+// a server restart.
+
+/**
+ * Load all users from disk. Returns null if users.json doesn't exist (legacy mode).
+ * Returns the parsed {userId: profile} object otherwise.
+ */
+function loadUsers() {
+  if (!existsSync(USERS_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(USERS_FILE, 'utf8'));
+  } catch (err) {
+    console.error('Failed to read users.json:', err);
+    return null;
+  }
+}
+
+/**
+ * Atomically write the users object to disk. Uses the same .tmp + rename
+ * pattern as the KV store to prevent corruption if the server crashes mid-write.
+ */
+function saveUsers(users) {
+  const tmp = join(DATA_DIR, 'users.tmp');
+  writeFileSync(tmp, JSON.stringify(users, null, 2), 'utf8');
+  renameSync(tmp, USERS_FILE);
+}
+
+/**
+ * Hash a password using scrypt (memory-hard KDF). Resistant to GPU/ASIC
+ * brute-force attacks, unlike plain SHA-256. The userId serves as a unique
+ * salt per account — no two users produce the same hash even with identical
+ * passwords. Node's built-in crypto.scryptSync requires no new dependencies.
+ */
+function hashPassword(password, userId) {
+  return crypto.scryptSync(password, userId, 64).toString('hex');
+}
+
+// ── Session token helpers ────────────────────────────────────────────────────
+// Multi-user sessions use a structured cookie: "userId:timestamp:hmac"
+// where hmac = HMAC-SHA256(SESSION_SECRET, "userId:timestamp"). The token
+// is HttpOnly, SameSite=Strict, Secure in production, and expires after 30d.
+// The timestamp is embedded so we can add server-side expiry in the future.
+
+/** Max session age in seconds (30 days). */
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+
+/**
+ * Create a signed session token for the given userId.
+ * Format: "userId:timestamp:hmac" — the HMAC covers userId + timestamp
+ * so neither can be tampered with.
+ */
+function createSessionToken(userId) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const payload = `${userId}:${timestamp}`;
+  const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return `${payload}:${hmac}`;
+}
+
+/**
+ * Verify a session token and return the userId if valid, or null if invalid.
+ * Splits the token into userId:timestamp:hmac, recomputes the HMAC, and
+ * compares using timingSafeEqual to prevent timing attacks.
+ */
+function verifySessionToken(token) {
+  if (!token) return null;
+  const parts = token.split(':');
+  // Must have exactly 3 parts: userId, timestamp, hmac
+  if (parts.length !== 3) return null;
+  const [userId, timestamp, hmac] = parts;
+  if (!userId || !timestamp || !hmac) return null;
+
+  // Recompute the expected HMAC and compare timing-safely
+  const payload = `${userId}:${timestamp}`;
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  const a = Buffer.from(hmac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  return userId;
+}
+
+/**
+ * Build the Set-Cookie header value for a session cookie.
+ * Secure flag is set in production (when PORT env var is injected by Railway).
+ * HttpOnly prevents JS access. SameSite=Strict prevents CSRF.
+ */
+function sessionCookie(token) {
+  const secure = process.env.PORT ? '; Secure' : '';
+  return `vq_session=${token}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${SESSION_MAX_AGE}`;
+}
+
+// ── Cookie parser ────────────────────────────────────────────────────────────
 function parseCookies(req) {
   const cookies = {};
   for (const part of (req.headers.cookie || '').split(';')) {
@@ -57,25 +191,127 @@ function parseCookies(req) {
   return cookies;
 }
 
-// Uses timingSafeEqual instead of === to prevent timing attacks, where an
-// attacker measures response time to deduce the token one character at a time.
-// The length check comes first because timingSafeEqual throws on mismatched
-// lengths — comparing two integers leaks no useful information.
-function isAuthenticated(req) {
-  if (!AUTH_TOKEN) return true; // auth disabled in dev
-  const token = parseCookies(req)['vq_session'] || '';
-  const a = Buffer.from(token);
-  const b = Buffer.from(AUTH_TOKEN);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 // ── Auth middleware ───────────────────────────────────────────────────────────
+// Supports two modes:
+//   1. Multi-user mode (users.json exists): parse the structured session token,
+//      verify the HMAC, look up the user, and set req.user.
+//   2. Legacy mode (no users.json): compare the cookie against the single
+//      LEGACY_AUTH_TOKEN derived from AUTH_PASSWORD. Sets req.user = null.
+//
+// If auth is disabled entirely (no users.json AND no AUTH_PASSWORD), all
+// requests pass through with req.user = null. This is for local dev only.
 function requireAuth(req, res, next) {
-  if (isAuthenticated(req)) return next();
-  // API routes get 401; page routes get redirected to login
+  const users = loadUsers();
+  const token = parseCookies(req)['vq_session'] || '';
+
+  if (users) {
+    // ── Multi-user mode ──────────────────────────────────────────────────
+    const userId = verifySessionToken(token);
+    if (!userId || !users[userId]) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
+      return res.redirect('/login');
+    }
+    const u = users[userId];
+    req.user = { id: userId, displayName: u.displayName, role: u.role };
+    return next();
+  }
+
+  // ── Legacy mode (single password) ────────────────────────────────────────
+  if (!LEGACY_AUTH_TOKEN) {
+    // Auth disabled entirely (no password, no users) — local dev only
+    req.user = null;
+    return next();
+  }
+  // Compare the cookie against the legacy single-password token using
+  // timingSafeEqual to prevent timing attacks.
+  const a = Buffer.from(token);
+  const b = Buffer.from(LEGACY_AUTH_TOKEN);
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+    req.user = null; // Legacy mode — no user identity
+    return next();
+  }
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'Unauthorized' } });
   res.redirect('/login');
 }
+
+// ── KV key namespacing ───────────────────────────────────────────────────────
+// In multi-user mode, every KV key is prefixed with "u_{userId}_" so each
+// user's data is fully isolated. In legacy mode (req.user === null), keys
+// are used as-is — no prefix. This means the frontend is completely unaware
+// of namespacing; it requests "vocab-quest-data" and the server silently
+// maps it to "u_emma_vocab-quest-data" based on the session.
+
+function sanitizeKey(key) {
+  return key.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/**
+ * Resolve a KV key to its namespaced filename (without .json extension).
+ * In multi-user mode: prefixes with "u_{userId}_".
+ * In legacy mode: returns the key unchanged.
+ */
+function resolveKey(req, key) {
+  const sanitized = sanitizeKey(key);
+  if (!req.user) return sanitized; // Legacy mode — no prefix
+  return `u_${sanitizeKey(req.user.id)}_${sanitized}`;
+}
+
+// ── Shared login page styles ─────────────────────────────────────────────────
+// Used by both /login and /setup pages to maintain a consistent look.
+const LOGIN_STYLES = `
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f8f5ef;
+      background-image: radial-gradient(ellipse at 15% 10%, rgba(180,140,80,0.05) 0%, transparent 55%),
+                        radial-gradient(ellipse at 85% 90%, rgba(140,100,40,0.04) 0%, transparent 55%);
+      font-family: 'Source Serif 4', Georgia, serif;
+      color: #2c2218;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 300px;
+      padding: 32px;
+      border: 1px solid rgba(100,70,20,0.12);
+      border-radius: 6px;
+      background: #ffffff;
+      box-shadow: 0 2px 12px rgba(100,70,20,0.06);
+    }
+    h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.02em; text-align: center; color: #6b5218; }
+    p.subtitle { font-size: 13px; text-align: center; color: #8a6d2e; opacity: 0.7; margin-top: -4px; }
+    input {
+      padding: 10px 12px;
+      background: #f8f5ef;
+      border: 1px solid rgba(100,70,20,0.18);
+      border-radius: 4px;
+      color: #2c2218;
+      font-family: 'Source Serif 4', Georgia, serif;
+      font-size: 15px;
+      outline: none;
+    }
+    input::placeholder { color: #8a6d2e; opacity: 0.5; }
+    input:focus { border-color: rgba(100,70,20,0.4); box-shadow: 0 0 0 2px rgba(100,70,20,0.06); }
+    button {
+      padding: 10px;
+      background: rgba(100,70,20,0.08);
+      border: 1px solid rgba(100,70,20,0.18);
+      border-radius: 4px;
+      color: #6b5218;
+      font-family: 'Source Serif 4', Georgia, serif;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+    }
+    button:hover { background: rgba(100,70,20,0.14); }
+    .error { color: #b83030; font-size: 13px; text-align: center; }
+`;
 
 const app = express();
 // Security headers (X-Frame-Options, HSTS, nosniff, etc.). CSP is disabled
@@ -88,59 +324,163 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
+// ── First-time setup (exempt from auth) ──────────────────────────────────────
+// The /setup page is shown only when users.json does not exist. It creates
+// the initial admin account and migrates any existing data files to the new
+// user's namespace. Once users.json exists, /setup redirects to /login.
+
+app.get('/setup', (_req, res) => {
+  // If users already exist, there's nothing to set up — go to login
+  if (existsSync(USERS_FILE)) return res.redirect('/login');
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Setup</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form method="POST" action="/api/setup">
+    <h1>Vocab Quest</h1>
+    <p class="subtitle">Create your admin account</p>
+    <input type="text" name="username" placeholder="Username" required autofocus autocomplete="username">
+    <input type="text" name="displayName" placeholder="Display name" required>
+    <input type="password" name="password" placeholder="Password" required autocomplete="new-password">
+    <button type="submit">Create Account</button>
+  </form>
+</body>
+</html>`);
+});
+
+app.post('/api/setup', (req, res) => {
+  // Guard: only works when no users exist yet. Once users.json is created,
+  // this endpoint is permanently locked (returns 403).
+  if (existsSync(USERS_FILE)) {
+    return res.status(403).json({ error: { message: 'Setup already completed' } });
+  }
+
+  const { username, displayName, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: { message: 'Username and password are required' } });
+  }
+
+  // Sanitize the username to be safe as a file prefix (same rules as KV keys)
+  const userId = sanitizeKey(username.trim().toLowerCase());
+  if (!userId) {
+    return res.status(400).json({ error: { message: 'Invalid username' } });
+  }
+
+  // Create the first user with admin role
+  const users = {
+    [userId]: {
+      displayName: (displayName || username).trim(),
+      passwordHash: hashPassword(password, userId),
+      role: 'admin',
+      // Reserved for future per-user API key support (not used yet)
+      anthropicApiKey: null,
+      geminiApiKey: null,
+      createdAt: new Date().toISOString(),
+    },
+  };
+
+  // ── Migrate existing data files to the new user's namespace ──────────
+  // Uses a copy-first, verify, then delete strategy to prevent data loss
+  // from partial failures. See docs/multi-user-auth-design.md §10.1.
+  const migrated = [];
+  const skippedFiles = ['users.json', 'users.tmp', '.session-secret'];
+  try {
+    const files = readdirSync(DATA_DIR).filter(f =>
+      f.endsWith('.json') && !skippedFiles.includes(f)
+    );
+
+    // Phase A: Copy each existing file to the user-namespaced version
+    for (const file of files) {
+      const src = join(DATA_DIR, file);
+      const baseName = file.slice(0, -5); // strip .json
+      const dest = join(DATA_DIR, `u_${userId}_${baseName}.json`);
+      copyFileSync(src, dest);
+      console.log(`[setup migration] Copied ${file} → u_${userId}_${baseName}.json`);
+      migrated.push({ src, dest, file });
+    }
+
+    // Phase B: Verify every copied file exists and matches the source size
+    for (const { src, dest, file } of migrated) {
+      if (!existsSync(dest)) {
+        throw new Error(`Verification failed: ${dest} does not exist after copy`);
+      }
+      const srcSize = statSync(src).size;
+      const destSize = statSync(dest).size;
+      if (srcSize !== destSize) {
+        throw new Error(`Verification failed: ${file} size mismatch (${srcSize} vs ${destSize})`);
+      }
+    }
+
+    // Phase C: Delete the original unprefixed files now that copies are verified
+    for (const { src, file } of migrated) {
+      unlinkSync(src);
+      console.log(`[setup migration] Removed original ${file}`);
+    }
+
+    if (migrated.length > 0) {
+      console.log(`[setup migration] Successfully migrated ${migrated.length} files to user "${userId}"`);
+    }
+  } catch (err) {
+    // Migration failed — log the error but still create the account.
+    // The copied files remain alongside originals; no data is lost.
+    console.error('[setup migration] Error during migration:', err.message);
+    console.error('[setup migration] Some files may need manual cleanup. Originals are intact.');
+  }
+
+  // Save the new users file (atomic write)
+  saveUsers(users);
+
+  // Log the user in immediately by setting their session cookie
+  const token = createSessionToken(userId);
+  res.setHeader('Set-Cookie', sessionCookie(token));
+  res.redirect('/');
+});
+
 // ── Login page & logout (exempt from auth) ────────────────────────────────────
+// Renders differently depending on mode:
+//   - Multi-user mode (users.json exists): shows username + password fields
+//   - Legacy mode (no users.json): shows password-only field (original behavior)
+//   - No auth at all: redirects to / (nothing to log in to)
+
 app.get('/login', (_req, res) => {
+  const users = loadUsers();
+
+  // If multi-user is active, show the full login form with username field
+  if (users) {
+    return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Login</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form method="POST" action="/api/login">
+    <h1>Vocab Quest</h1>
+    <input type="text" name="username" placeholder="Username" autofocus autocomplete="username">
+    <input type="password" name="password" placeholder="Password" autocomplete="current-password">
+    <button type="submit">Enter</button>
+    ${res.locals.error ? `<p class="error">${res.locals.error}</p>` : ''}
+  </form>
+</body>
+</html>`);
+  }
+
+  // Legacy mode: password-only login (original behavior)
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Vocab Quest — Login</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #0e0e0e;
-      font-family: system-ui, sans-serif;
-      color: #d4b04a;
-    }
-    form {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      width: 300px;
-      padding: 32px;
-      border: 1px solid rgba(180,130,50,0.25);
-      border-radius: 6px;
-      background: rgba(255,255,255,0.03);
-    }
-    h1 { font-size: 18px; letter-spacing: 0.1em; text-align: center; }
-    input {
-      padding: 10px 12px;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(180,130,50,0.3);
-      border-radius: 4px;
-      color: #e8d5a0;
-      font-size: 15px;
-      outline: none;
-    }
-    input:focus { border-color: rgba(180,130,50,0.7); }
-    button {
-      padding: 10px;
-      background: rgba(180,130,50,0.15);
-      border: 1px solid rgba(180,130,50,0.4);
-      border-radius: 4px;
-      color: #d4b04a;
-      font-size: 15px;
-      cursor: pointer;
-      letter-spacing: 0.05em;
-    }
-    button:hover { background: rgba(180,130,50,0.25); }
-    .error { color: #e07070; font-size: 13px; text-align: center; }
-  </style>
+  <style>${LOGIN_STYLES}</style>
 </head>
 <body>
   <form method="POST" action="/api/login">
@@ -165,18 +505,36 @@ const loginLimiter = rateLimit({
 });
 
 app.post('/api/login', loginLimiter, (req, res) => {
-  const { password } = req.body;
-  const token = AUTH_TOKEN
-    ? createHmac('sha256', password || '').update('vocab-quest').digest('hex')
+  const { username, password } = req.body;
+  const users = loadUsers();
+
+  if (users) {
+    // ── Multi-user login ─────────────────────────────────────────────────
+    // Look up the user by username, verify the scrypt hash, and issue a
+    // signed session token. The username is sanitized to match the key
+    // format in users.json (lowercase, safe characters only).
+    const userId = sanitizeKey((username || '').trim().toLowerCase());
+    const user = users[userId];
+    if (!user || user.passwordHash !== hashPassword(password || '', userId)) {
+      res.locals.error = 'Incorrect username or password';
+      res.status(401);
+      return app.handle({ ...req, method: 'GET', url: '/login' }, res);
+    }
+
+    const token = createSessionToken(userId);
+    res.setHeader('Set-Cookie', sessionCookie(token));
+    return res.redirect('/');
+  }
+
+  // ── Legacy login (single password) ───────────────────────────────────────
+  const token = LEGACY_AUTH_TOKEN
+    ? crypto.createHmac('sha256', password || '').update('vocab-quest').digest('hex')
     : null;
 
-  if (!AUTH_TOKEN || token === AUTH_TOKEN) {
+  if (!LEGACY_AUTH_TOKEN || token === LEGACY_AUTH_TOKEN) {
     // Secure flag ensures the cookie is only sent over HTTPS, preventing
     // leakage if someone hits an HTTP URL. Omitted in dev (localhost is HTTP).
-    const secure = process.env.PORT ? '; Secure' : '';
-    res.setHeader('Set-Cookie',
-      `vq_session=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${60 * 60 * 24 * 30}`
-    );
+    res.setHeader('Set-Cookie', sessionCookie(LEGACY_AUTH_TOKEN));
     return res.redirect('/');
   }
 
@@ -214,6 +572,110 @@ app.get('/api/health', async (_req, res) => {
 
 // ── All routes below require auth ─────────────────────────────────────────────
 app.use(requireAuth);
+
+// ── GET /api/me — return the current user's profile ──────────────────────────
+// Used by the frontend to display the user's name, determine admin status,
+// and decide whether to show the admin panel. Returns null in legacy mode.
+app.get('/api/me', (req, res) => {
+  if (!req.user) return res.json(null);
+  res.json({
+    id: req.user.id,
+    displayName: req.user.displayName,
+    role: req.user.role,
+  });
+});
+
+// ── User management (admin only) ─────────────────────────────────────────────
+// These endpoints let the admin create and delete family/friend accounts.
+// All routes verify req.user.role === 'admin' before proceeding.
+
+/**
+ * Middleware that rejects non-admin users with 403.
+ */
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: { message: 'Admin access required' } });
+  }
+  next();
+}
+
+// GET /api/users — list all user accounts (no secrets)
+app.get('/api/users', requireAdmin, (_req, res) => {
+  const users = loadUsers();
+  if (!users) return res.json([]);
+  const list = Object.entries(users).map(([id, u]) => ({
+    id,
+    displayName: u.displayName,
+    role: u.role,
+    createdAt: u.createdAt,
+  }));
+  res.json(list);
+});
+
+// POST /api/users — create a new user account
+app.post('/api/users', requireAdmin, (req, res) => {
+  const { id, displayName, password } = req.body;
+  if (!id || !password) {
+    return res.status(400).json({ error: { message: 'id and password are required' } });
+  }
+
+  const userId = sanitizeKey(id.trim().toLowerCase());
+  if (!userId) {
+    return res.status(400).json({ error: { message: 'Invalid user id' } });
+  }
+
+  const users = loadUsers();
+  if (!users) {
+    return res.status(400).json({ error: { message: 'Multi-user mode not active. Run /setup first.' } });
+  }
+  if (users[userId]) {
+    return res.status(409).json({ error: { message: `User "${userId}" already exists` } });
+  }
+
+  users[userId] = {
+    displayName: (displayName || id).trim(),
+    passwordHash: hashPassword(password, userId),
+    role: 'member',
+    // Reserved for future per-user API key support (not used yet)
+    anthropicApiKey: null,
+    geminiApiKey: null,
+    createdAt: new Date().toISOString(),
+  };
+  saveUsers(users);
+  res.json({ ok: true });
+});
+
+// DELETE /api/users/:id — delete a user and all their namespaced data files.
+// The admin cannot delete their own account to prevent accidental lockout.
+app.delete('/api/users/:id', requireAdmin, async (req, res) => {
+  const userId = sanitizeKey(req.params.id);
+  if (userId === req.user.id) {
+    return res.status(400).json({ error: { message: 'Cannot delete your own account' } });
+  }
+
+  const users = loadUsers();
+  if (!users || !users[userId]) {
+    return res.status(404).json({ error: { message: 'User not found' } });
+  }
+
+  // Remove user from users.json
+  delete users[userId];
+  saveUsers(users);
+
+  // Delete all data files namespaced to this user (u_{userId}_*.json)
+  // This is best-effort — if some files fail to delete, the user account
+  // is already removed and the orphaned files are harmless.
+  const prefix = `u_${userId}_`;
+  try {
+    const files = readdirSync(DATA_DIR).filter(f => f.startsWith(prefix));
+    await Promise.all(files.map(f => unlink(join(DATA_DIR, f)).catch(() => {})));
+    console.log(`[user delete] Removed ${files.length} data files for user "${userId}"`);
+  } catch (err) {
+    console.error(`[user delete] Error cleaning up files for "${userId}":`, err);
+  }
+
+  res.json({ ok: true });
+});
 
 // ── /api/claude — proxied via Agent SDK (uses claude login credentials) ───────
 app.post('/api/claude', async (req, res) => {
@@ -332,25 +794,20 @@ app.post('/api/gemini/:model', async (req, res) => {
 // abstraction with a window.storage pluggable backend, so wiring that to these
 // endpoints moved everything server-side with minimal client changes.
 //
-// Each key becomes a JSON file in DATA_DIR. Writes use atomic rename (write to
-// .tmp, then fs.rename) so a crash mid-write can't corrupt a file. Keys are
-// sanitized to prevent path traversal.
+// Each key becomes a JSON file in DATA_DIR. In multi-user mode, keys are
+// prefixed with "u_{userId}_" via resolveKey() for full per-user isolation.
+// Writes use atomic rename (write to .tmp, then fs.rename) so a crash
+// mid-write can't corrupt a file. Keys are sanitized to prevent path traversal.
 //
 // In Codespaces, ./data/ persists inside /workspaces/ across stops/starts.
 // On Railway, DATA_DIR should point to a mounted volume (e.g. /data).
-const DATA_DIR = resolve(process.cwd(), process.env.DATA_DIR || 'data');
-mkdirSync(DATA_DIR, { recursive: true });
-
-function sanitizeKey(key) {
-  return key.replace(/[^a-zA-Z0-9._-]/g, '_');
-}
 
 app.get('/api/kv/:key', (req, res) => {
   // Prevent browser from caching KV responses — the value can change between
   // requests (e.g., a GET returning null, then a PUT writes data, then another
   // GET should return the new data, not a cached null).
   res.set('Cache-Control', 'no-store');
-  const file = join(DATA_DIR, `${sanitizeKey(req.params.key)}.json`);
+  const file = join(DATA_DIR, `${resolveKey(req, req.params.key)}.json`);
   if (!existsSync(file)) return res.json(null);
   try {
     const raw = readFileSync(file, 'utf8');
@@ -362,7 +819,7 @@ app.get('/api/kv/:key', (req, res) => {
 });
 
 app.put('/api/kv/:key', (req, res) => {
-  const key = sanitizeKey(req.params.key);
+  const key = resolveKey(req, req.params.key);
   const file = join(DATA_DIR, `${key}.json`);
   const tmp = join(DATA_DIR, `${key}.tmp`);
   const { value } = req.body;
@@ -378,7 +835,7 @@ app.put('/api/kv/:key', (req, res) => {
 });
 
 app.delete('/api/kv/:key', async (req, res) => {
-  const file = join(DATA_DIR, `${sanitizeKey(req.params.key)}.json`);
+  const file = join(DATA_DIR, `${resolveKey(req, req.params.key)}.json`);
   try {
     await unlink(file);
   } catch (err) {
@@ -404,16 +861,21 @@ app.delete('/api/kv/:key', async (req, res) => {
 // deletes them all in parallel with Promise.all. The whole operation completes
 // in a single HTTP round trip (~100ms).
 //
+// In multi-user mode, all file paths are prefixed with "u_{userId}_" via
+// resolveKey() so deletion only touches the requesting user's data.
+//
 // Deleted data: vocab-book-{hash}, storybible-{hash}, wordlist-{chapterHash},
 // illust-index-{chapterHash}, illust-{chapterHash}-{word}, and the index entry.
 app.delete('/api/books/:hash', async (req, res) => {
   const bookHash = sanitizeKey(req.params.hash);
-  const bookFile = join(DATA_DIR, `vocab-book-${bookHash}.json`);
+  // resolveKey adds the user prefix in multi-user mode
+  const bookFileKey = resolveKey(req, `vocab-book-${bookHash}`);
+  const bookFile = join(DATA_DIR, `${bookFileKey}.json`);
 
   // Collect all files to delete — start with book-level files
   const toDelete = [
     bookFile,
-    join(DATA_DIR, `storybible-${bookHash}.json`),
+    join(DATA_DIR, `${resolveKey(req, `storybible-${bookHash}`)}.json`),
   ];
 
   // Read the book data to discover chapter-level keys. The chapter hash is
@@ -424,17 +886,18 @@ app.delete('/api/books/:hash', async (req, res) => {
       const raw = readFileSync(bookFile, 'utf8');
       const bookData = JSON.parse(raw);
       for (const ch of bookData.chapters || []) {
-        const chapterHash = createHash('sha256').update(ch.text).digest('hex').slice(0, 32);
-        toDelete.push(join(DATA_DIR, `wordlist-${chapterHash}.json`));
+        const chapterHash = crypto.createHash('sha256').update(ch.text).digest('hex').slice(0, 32);
+        toDelete.push(join(DATA_DIR, `${resolveKey(req, `wordlist-${chapterHash}`)}.json`));
 
         // The illustration index lists which words have cached images.
         // We need to read it to discover per-word illustration file names.
-        const illustIndexFile = join(DATA_DIR, `illust-index-${chapterHash}.json`);
+        const illustIndexKey = resolveKey(req, `illust-index-${chapterHash}`);
+        const illustIndexFile = join(DATA_DIR, `${illustIndexKey}.json`);
         try {
           if (existsSync(illustIndexFile)) {
             const words = JSON.parse(readFileSync(illustIndexFile, 'utf8'));
             for (const w of words) {
-              toDelete.push(join(DATA_DIR, `illust-${chapterHash}-${sanitizeKey(w)}.json`));
+              toDelete.push(join(DATA_DIR, `${resolveKey(req, `illust-${chapterHash}-${sanitizeKey(w)}`)}.json`));
             }
           }
         } catch {}
@@ -451,12 +914,13 @@ app.delete('/api/books/:hash', async (req, res) => {
   await Promise.all(toDelete.map(f => unlink(f).catch(() => {})));
 
   // Update the book index atomically (write .tmp then rename)
-  const indexFile = join(DATA_DIR, `${sanitizeKey(BOOK_INDEX_KEY)}.json`);
+  const indexKey = resolveKey(req, BOOK_INDEX_KEY);
+  const indexFile = join(DATA_DIR, `${indexKey}.json`);
   try {
     if (existsSync(indexFile)) {
       const index = JSON.parse(readFileSync(indexFile, 'utf8'));
       const updated = index.filter(b => b.hash !== req.params.hash);
-      const tmp = join(DATA_DIR, `${sanitizeKey(BOOK_INDEX_KEY)}.tmp`);
+      const tmp = join(DATA_DIR, `${indexKey}.tmp`);
       writeFileSync(tmp, JSON.stringify(updated), 'utf8');
       renameSync(tmp, indexFile);
     }
@@ -467,8 +931,6 @@ app.delete('/api/books/:hash', async (req, res) => {
 
   res.json({ ok: true });
 });
-
-const BOOK_INDEX_KEY = 'vocab-books-index';
 
 // Gemini availability check
 app.get('/api/gemini-available', (_req, res) => {
@@ -485,8 +947,12 @@ if (existsSync(distPath)) {
 
 const PORT = process.env.PORT || 3001; // Railway injects PORT at runtime
 app.listen(PORT, () => {
+  const users = loadUsers();
+  const mode = users
+    ? `multi-user (${Object.keys(users).length} accounts)`
+    : AUTH_PASSWORD ? 'single-password (legacy)' : 'disabled (set AUTH_PASSWORD or run /setup)';
   console.log(`Vocab Quest API server running on http://localhost:${PORT}`);
-  console.log(`Auth: ${AUTH_PASSWORD ? 'enabled' : 'disabled (set AUTH_PASSWORD to enable)'}`);
+  console.log(`Auth: ${mode}`);
   console.log(`Claude: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'using CLAUDE_CODE_OAUTH_TOKEN env var' : 'using ~/.claude/.credentials.json'}`);
   console.log(`Gemini: ${GEMINI_KEY ? 'configured' : 'NOT configured'}`);
 });
