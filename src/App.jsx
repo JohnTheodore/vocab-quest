@@ -3346,7 +3346,7 @@ export default function App() {
                 {showAdmin ? "Hide Admin" : "Admin"}
               </button>
             )}
-            <button className="link-btn" onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { window.location.href = '/login'; })}>Log out</button>
+            <button className="link-btn" onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { window.location.href = '/login'; }).catch(() => { window.location.href = '/login'; })}>Log out</button>
           </div>
         )}
 

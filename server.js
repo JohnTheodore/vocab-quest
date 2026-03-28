@@ -49,6 +49,11 @@ if (!GEMINI_KEY) {
   console.warn('WARNING: GEMINI_API_KEY is not set in .env — image generation will be unavailable');
 }
 
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const APP_URL = (process.env.APP_URL || 'http://localhost:5173').replace(/\/+$/, '');
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Vocab Quest <onboarding@resend.dev>';
+const RESET_TOKEN_MAX_AGE = 60 * 60; // 1 hour in seconds
+
 // ── Data directory ───────────────────────────────────────────────────────────
 // In Codespaces, ./data/ persists inside /workspaces/ across stops/starts.
 // On Railway, DATA_DIR should point to a mounted volume (e.g. /data).
@@ -234,9 +239,9 @@ function requireAuth(req, res, next) {
 
   // ── Legacy mode (single password) ────────────────────────────────────────
   if (!LEGACY_AUTH_TOKEN) {
-    // Auth disabled entirely (no password, no users) — local dev only
-    req.user = null;
-    return next();
+    // No auth configured at all — redirect to setup so the admin can create an account
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: { message: 'No users configured. Visit /setup to create an admin account.' } });
+    return res.redirect('/setup');
   }
   // Compare the cookie against the legacy single-password token using
   // timingSafeEqual to prevent timing attacks.
@@ -333,6 +338,10 @@ const LOGIN_STYLES = `
     }
     button:hover { background: rgba(100,70,20,0.14); }
     .error { color: #b83030; font-size: 13px; text-align: center; }
+    .success { color: #2e7d32; font-size: 13px; text-align: center; }
+    .link { font-size: 13px; text-align: center; }
+    .link a { color: #6b5218; opacity: 0.7; }
+    .link a:hover { opacity: 1; }
 `;
 
 // Brute-force protection: 5 attempts per 15 minutes per IP.
@@ -497,7 +506,10 @@ app.post('/api/setup', authLimiter, (req, res) => {
 app.get('/login', (_req, res) => {
   const users = loadUsers();
 
-  // If multi-user is active, show the full login form with username field
+  // No users yet — redirect to first-time setup
+  if (!users && !AUTH_PASSWORD) return res.redirect('/setup');
+
+  // If multi-user is active, show the full login form with email field
   if (users) {
     return res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -514,6 +526,7 @@ app.get('/login', (_req, res) => {
     <input type="password" name="password" placeholder="Password" autocomplete="current-password">
     <button type="submit">Enter</button>
     ${res.locals.error ? `<p class="error">${res.locals.error}</p>` : ''}
+    <p class="link"><a href="/forgot-password">Forgot password?</a></p>
   </form>
 </body>
 </html>`);
@@ -548,7 +561,13 @@ app.post('/api/login', authLimiter, (req, res) => {
     // Look up the user by email, verify the scrypt hash, and issue a
     // signed session token. The email is sanitized to match the key
     // format in users.json (lowercase, safe characters only).
-    const userId = sanitizeKey((email || '').trim().toLowerCase());
+    const trimmedEmail = (email || '').trim().toLowerCase();
+    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
+      res.locals.error = 'Incorrect email or password';
+      res.status(401);
+      return app.handle({ ...req, method: 'GET', url: '/login' }, res);
+    }
+    const userId = sanitizeKey(trimmedEmail);
     const user = users[userId];
     // Always compute hash to avoid leaking whether user exists via timing
     const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
@@ -584,8 +603,233 @@ app.post('/api/login', authLimiter, (req, res) => {
 });
 
 app.post('/api/logout', (_req, res) => {
-  res.setHeader('Set-Cookie', 'vq_session=; Path=/; HttpOnly; Max-Age=0');
+  const secure = process.env.PORT ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `vq_session=; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=0`);
   res.redirect('/login');
+});
+
+// ── Password reset flow (exempt from auth) ───────────────────────────────────
+// Step 1: GET /forgot-password — renders the "enter your email" form.
+// Step 2: POST /api/forgot-password — generates a reset token, emails the link.
+// Step 3: GET /reset-password?token=xxx — renders the "enter new password" form.
+// Step 4: POST /api/reset-password — verifies token, updates password.
+
+app.get('/forgot-password', (_req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Reset Password</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form method="POST" action="/api/forgot-password">
+    <h1>Reset Password</h1>
+    <p class="subtitle">Enter your email to receive a reset link</p>
+    <input type="email" name="email" placeholder="Email" required autofocus autocomplete="email">
+    <button type="submit">Send Reset Link</button>
+    <p class="link"><a href="/login">Back to login</a></p>
+  </form>
+</body>
+</html>`);
+});
+
+app.post('/api/forgot-password', authLimiter, async (req, res) => {
+  // Always show the same message regardless of whether the email exists,
+  // to prevent user enumeration attacks.
+  const successPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Check Your Email</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form>
+    <h1>Check Your Email</h1>
+    <p class="success">If an account exists with that email, we've sent a password reset link. It expires in 1 hour.</p>
+    <p class="link"><a href="/login">Back to login</a></p>
+  </form>
+</body>
+</html>`;
+
+  const { email } = req.body;
+  if (!email) return res.send(successPage);
+
+  const users = loadUsers();
+  if (!users) return res.send(successPage);
+
+  const trimmedEmail = (email || '').trim().toLowerCase();
+  const userId = sanitizeKey(trimmedEmail);
+  const user = users[userId];
+
+  // If user doesn't exist, show same success page (no enumeration)
+  if (!user) return res.send(successPage);
+
+  // Skip if a reset token was issued less than 5 minutes ago (prevents email flooding)
+  const now = Math.floor(Date.now() / 1000);
+  const RESET_COOLDOWN = 5 * 60; // 5 minutes
+  if (user.resetTokenExpiry && (user.resetTokenExpiry - RESET_TOKEN_MAX_AGE + RESET_COOLDOWN) > now) {
+    return res.send(successPage);
+  }
+
+  // Generate a random reset token and store its SHA-256 hash
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  user.resetTokenHash = tokenHash;
+  user.resetTokenExpiry = Math.floor(Date.now() / 1000) + RESET_TOKEN_MAX_AGE;
+  saveUsers(users);
+
+  // Send the reset email via Resend
+  const resetUrl = `${APP_URL}/reset-password?token=${rawToken}&email=${encodeURIComponent(trimmedEmail)}`;
+
+  if (RESEND_API_KEY) {
+    try {
+      const emailRes = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: EMAIL_FROM,
+          to: [trimmedEmail],
+          subject: 'Vocab Quest — Reset Your Password',
+          html: `<p>Hi ${user.displayName},</p>
+<p>Someone requested a password reset for your Vocab Quest account. Click the link below to set a new password:</p>
+<p><a href="${resetUrl}">${resetUrl}</a></p>
+<p>This link expires in 1 hour. If you didn't request this, you can safely ignore this email.</p>
+<p>— Vocab Quest</p>`,
+        }),
+      });
+      if (!emailRes.ok) {
+        const err = await emailRes.json().catch(() => ({}));
+        console.error('[password reset] Resend API error:', emailRes.status, err);
+      }
+    } catch (err) {
+      console.error('[password reset] Failed to send email:', err.message);
+    }
+  } else {
+    // Dev mode: log the reset URL to the console
+    console.log(`[password reset] No RESEND_API_KEY set. Reset URL:\n  ${resetUrl}`);
+  }
+
+  res.send(successPage);
+});
+
+app.get('/reset-password', (req, res) => {
+  const { token, email } = req.query;
+  if (!token || !email) return res.redirect('/forgot-password');
+
+  // Normalize email so the form submits the same casing the backend expects
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // Escape HTML special characters to prevent XSS via query params
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — New Password</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form method="POST" action="/api/reset-password">
+    <h1>New Password</h1>
+    <p class="subtitle">Enter your new password (min 8 characters)</p>
+    <input type="hidden" name="token" value="${esc(token)}">
+    <input type="hidden" name="email" value="${esc(normalizedEmail)}">
+    <input type="password" name="password" placeholder="New password" required autofocus autocomplete="new-password" minlength="8">
+    <input type="password" name="confirmPassword" placeholder="Confirm password" required autocomplete="new-password" minlength="8">
+    <button type="submit">Reset Password</button>
+  </form>
+</body>
+</html>`);
+});
+
+app.post('/api/reset-password', authLimiter, (req, res) => {
+  const { token, email, password, confirmPassword } = req.body;
+
+  const errorPage = (msg) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Reset Password</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form>
+    <h1>Reset Password</h1>
+    <p class="error">${msg}</p>
+    <p class="link"><a href="/forgot-password">Try again</a></p>
+  </form>
+</body>
+</html>`;
+
+  if (!token || !email) return res.status(400).send(errorPage('Invalid reset link.'));
+  if (!password || password.length < 8) return res.status(400).send(errorPage('Password must be at least 8 characters.'));
+  if (password !== confirmPassword) return res.status(400).send(errorPage('Passwords do not match.'));
+
+  const users = loadUsers();
+  if (!users) return res.status(400).send(errorPage('Invalid reset link.'));
+
+  const trimmedEmail = email.trim().toLowerCase();
+  const userId = sanitizeKey(trimmedEmail);
+  const user = users[userId];
+
+  if (!user || !user.resetTokenHash || !user.resetTokenExpiry) {
+    return res.status(400).send(errorPage('Invalid or expired reset link.'));
+  }
+
+  // Check expiry
+  const now = Math.floor(Date.now() / 1000);
+  if (now > user.resetTokenExpiry) {
+    // Clear expired token
+    delete user.resetTokenHash;
+    delete user.resetTokenExpiry;
+    saveUsers(users);
+    return res.status(400).send(errorPage('This reset link has expired. Please request a new one.'));
+  }
+
+  // Verify token hash using timingSafeEqual
+  const providedHash = crypto.createHash('sha256').update(token).digest('hex');
+  const a = Buffer.from(providedHash);
+  const b = Buffer.from(user.resetTokenHash);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(400).send(errorPage('Invalid or expired reset link.'));
+  }
+
+  // Token is valid — update the password
+  const newSalt = generateSalt();
+  user.passwordHash = hashPassword(password, newSalt);
+  user.salt = newSalt;
+  user.passwordVersion = (user.passwordVersion || 1) + 1;
+  delete user.resetTokenHash;
+  delete user.resetTokenExpiry;
+  saveUsers(users);
+
+  // Show success page — user needs to log in with new password
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vocab Quest — Password Reset</title>
+  <style>${LOGIN_STYLES}</style>
+</head>
+<body>
+  <form>
+    <h1>Password Reset</h1>
+    <p class="success">Your password has been reset. All existing sessions have been logged out.</p>
+    <p class="link"><a href="/login">Log in with your new password</a></p>
+  </form>
+</body>
+</html>`);
 });
 
 // ── Health check (exempt from auth — called by Railway before routing traffic) ──

@@ -25,6 +25,8 @@ import express from 'express';
 const SESSION_SECRET = 'test-secret-for-auth-tests';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function sanitizeKey(key) {
   return key.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
@@ -194,7 +196,11 @@ function createTestServer(dataDir) {
     const users = loadUsers();
     if (!users) return res.status(400).json({ error: { message: 'No users configured' } });
 
-    const userId = sanitizeKey((email || '').trim().toLowerCase());
+    const trimmedEmail = (email || '').trim().toLowerCase();
+    if (!trimmedEmail || !EMAIL_RE.test(trimmedEmail)) {
+      return res.status(401).json({ error: { message: 'Incorrect email or password' } });
+    }
+    const userId = sanitizeKey(trimmedEmail);
     const user = users[userId];
     const computedHash = hashPassword(password || '', user?.salt || 'dummy-salt');
     const storedHash = user?.passwordHash || '';
@@ -206,6 +212,85 @@ function createTestServer(dataDir) {
 
     const token = createSessionToken(userId, user.passwordVersion || 1);
     res.setHeader('Set-Cookie', `vq_session=${token}; Path=/; HttpOnly`);
+    res.json({ ok: true });
+  });
+
+  // ── Password reset (test version — no email, returns token in JSON) ──────
+  const RESET_TOKEN_MAX_AGE = 60 * 60; // 1 hour
+
+  app.post('/api/forgot-password', (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.json({ ok: true });
+
+    const users = loadUsers();
+    if (!users) return res.json({ ok: true });
+
+    const trimmedEmail = (email || '').trim().toLowerCase();
+    const userId = sanitizeKey(trimmedEmail);
+    const user = users[userId];
+    if (!user) return res.json({ ok: true });
+
+    // Skip if a reset token was issued less than 5 minutes ago
+    const now = Math.floor(Date.now() / 1000);
+    const RESET_COOLDOWN = 5 * 60;
+    if (user.resetTokenExpiry && (user.resetTokenExpiry - RESET_TOKEN_MAX_AGE + RESET_COOLDOWN) > now) {
+      return res.json({ ok: true, cooldown: true });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    user.resetTokenHash = tokenHash;
+    user.resetTokenExpiry = Math.floor(Date.now() / 1000) + RESET_TOKEN_MAX_AGE;
+    saveUsers(users);
+
+    // In tests, return the raw token so we can use it (no email sending)
+    res.json({ ok: true, token: rawToken });
+  });
+
+  app.post('/api/reset-password', (req, res) => {
+    const { token, email, password, confirmPassword } = req.body;
+    if (!token || !email) return res.status(400).json({ error: { message: 'Invalid reset link' } });
+    if (!password || password.length < 8) return res.status(400).json({ error: { message: 'Password must be at least 8 characters' } });
+    if (confirmPassword !== undefined && password !== confirmPassword) return res.status(400).json({ error: { message: 'Passwords do not match' } });
+
+    const users = loadUsers();
+    if (!users) return res.status(400).json({ error: { message: 'Invalid reset link' } });
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const userId = sanitizeKey(trimmedEmail);
+    const user = users[userId];
+
+    if (!user || !user.resetTokenHash || !user.resetTokenExpiry) {
+      return res.status(400).json({ error: { message: 'Invalid or expired reset link' } });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    if (now > user.resetTokenExpiry) {
+      delete user.resetTokenHash;
+      delete user.resetTokenExpiry;
+      saveUsers(users);
+      return res.status(400).json({ error: { message: 'Reset link expired' } });
+    }
+
+    const providedHash = crypto.createHash('sha256').update(token).digest('hex');
+    const a = Buffer.from(providedHash);
+    const b = Buffer.from(user.resetTokenHash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(400).json({ error: { message: 'Invalid or expired reset link' } });
+    }
+
+    const newSalt = generateSalt();
+    user.passwordHash = hashPassword(password, newSalt);
+    user.salt = newSalt;
+    user.passwordVersion = (user.passwordVersion || 1) + 1;
+    delete user.resetTokenHash;
+    delete user.resetTokenExpiry;
+    saveUsers(users);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/logout', (_req, res) => {
+    res.setHeader('Set-Cookie', 'vq_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
     res.json({ ok: true });
   });
 
@@ -487,6 +572,50 @@ describe('Login', () => {
     });
     assert.equal(res.status, 401);
   });
+
+  it('is case-insensitive for email', async () => {
+    const res = await jsonPost(`${BASE_URL}/api/login`, {
+      email: 'Dad@Example.COM', password: 'testpass123',
+    });
+    assert.equal(res.status, 200);
+    const cookie = extractCookie(res);
+    assert.ok(cookie, 'Should set a session cookie');
+  });
+
+  it('safely handles special characters in email', async () => {
+    const res = await jsonPost(`${BASE_URL}/api/login`, {
+      email: "'; DROP TABLE users; --", password: 'testpass123',
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+// ── Logout ──────────────────────────────────────────────────────────────────
+
+describe('Logout', () => {
+  it('invalidates the session cookie', async () => {
+    // Login to get a session
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, {
+      email: 'dad@example.com', password: 'testpass123',
+    });
+    const cookie = extractCookie(loginRes);
+    assert.ok(cookie);
+
+    // Verify session works
+    const meRes = await jsonGet(`${BASE_URL}/api/me`, cookie);
+    assert.equal(meRes.status, 200);
+
+    // Logout (clears cookie — server responds with Set-Cookie: vq_session=;)
+    const logoutRes = await fetch(`${BASE_URL}/api/logout`, {
+      method: 'POST',
+      headers: { Cookie: `vq_session=${cookie}` },
+      redirect: 'manual',
+    });
+    // The server clears the cookie by setting vq_session= (empty value)
+    const setCookie = logoutRes.headers.get('set-cookie') || '';
+    assert.ok(setCookie.includes('vq_session=;') || setCookie.includes('vq_session='), 'Should clear cookie');
+    assert.ok(setCookie.includes('Max-Age=0'), 'Should expire immediately');
+  });
 });
 
 // ── Protected routes ────────────────────────────────────────────────────────
@@ -656,6 +785,118 @@ describe('User deletion with data cleanup', () => {
     // Verify user can no longer log in
     const loginAgain = await jsonPost(`${BASE_URL}/api/login`, { email: 'testuser@example.com', password: 'test1234' });
     assert.equal(loginAgain.status, 401);
+  });
+});
+
+// ── Password reset ──────────────────────────────────────────────────────────
+
+describe('Password reset flow', () => {
+  it('generates a reset token and allows password change', async () => {
+    // Request a reset for the admin account
+    const forgotRes = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'dad@example.com' });
+    assert.equal(forgotRes.status, 200);
+    const { token } = await forgotRes.json();
+    assert.ok(token, 'Should return a reset token in test mode');
+
+    // Reset the password using the token
+    const resetRes = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token, email: 'dad@example.com', password: 'newpass123',
+    });
+    assert.equal(resetRes.status, 200);
+
+    // Old password should no longer work
+    const oldLogin = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'testpass123' });
+    assert.equal(oldLogin.status, 401);
+
+    // New password should work
+    const newLogin = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'newpass123' });
+    assert.equal(newLogin.status, 200);
+  });
+
+  it('invalidates existing sessions after password reset', async () => {
+    // Login to get a session cookie
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'newpass123' });
+    const cookie = extractCookie(loginRes);
+    assert.ok(cookie);
+
+    // Verify the session works
+    const meRes1 = await jsonGet(`${BASE_URL}/api/me`, cookie);
+    assert.equal(meRes1.status, 200);
+
+    // Reset password
+    const forgotRes = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'dad@example.com' });
+    const { token } = await forgotRes.json();
+    await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token, email: 'dad@example.com', password: 'resetpass1',
+    });
+
+    // Old session should be invalidated (passwordVersion bumped)
+    const meRes2 = await jsonGet(`${BASE_URL}/api/me`, cookie);
+    assert.equal(meRes2.status, 401);
+  });
+
+  it('rejects an invalid token', async () => {
+    const res = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token: 'deadbeef'.repeat(8), email: 'dad@example.com', password: 'whatever1',
+    });
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects a used token (single-use)', async () => {
+    const forgotRes = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'dad@example.com' });
+    const { token } = await forgotRes.json();
+
+    // Use it once
+    const first = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token, email: 'dad@example.com', password: 'singleuse1',
+    });
+    assert.equal(first.status, 200);
+
+    // Try to use it again
+    const second = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token, email: 'dad@example.com', password: 'singleuse2',
+    });
+    assert.equal(second.status, 400);
+  });
+
+  it('rejects password under 8 characters', async () => {
+    // Password length is validated before the token is checked, so a dummy token works
+    const res = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token: 'dummy', email: 'dad@example.com', password: 'short',
+    });
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects mismatched password confirmation', async () => {
+    const forgotRes = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'dad@example.com' });
+    const { token } = await forgotRes.json();
+
+    const res = await jsonPost(`${BASE_URL}/api/reset-password`, {
+      token, email: 'dad@example.com', password: 'newpass123', confirmPassword: 'different1',
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.ok(data.error.message.includes('match'));
+  });
+
+  it('returns ok even for nonexistent email (no enumeration)', async () => {
+    const res = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'nobody@example.com' });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+  });
+
+  it('enforces 5-minute cooldown between reset emails', async () => {
+    // Use emma (hasn't had a recent reset request)
+    const res1 = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'emma@example.com' });
+    const data1 = await res1.json();
+    assert.ok(data1.token, 'First request should generate a token');
+
+    // Second request within cooldown should not generate a new token
+    const res2 = await jsonPost(`${BASE_URL}/api/forgot-password`, { email: 'emma@example.com' });
+    const data2 = await res2.json();
+    assert.equal(data2.cooldown, true, 'Second request should hit cooldown');
+    assert.equal(data2.token, undefined, 'Should not issue a new token during cooldown');
   });
 });
 

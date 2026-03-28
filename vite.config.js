@@ -15,6 +15,8 @@ export default defineConfig({
       // Proxy auth pages to Express (server-rendered HTML)
       '/setup': { target: 'http://localhost:3001', changeOrigin: true },
       '/login': { target: 'http://localhost:3001', changeOrigin: true },
+      '/forgot-password': { target: 'http://localhost:3001', changeOrigin: true },
+      '/reset-password': { target: 'http://localhost:3001', changeOrigin: true },
     },
   },
 })

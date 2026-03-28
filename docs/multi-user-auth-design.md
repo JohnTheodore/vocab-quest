@@ -65,24 +65,34 @@ Schema:
 
 ```json
 {
-  "dad": {
+  "dad_example.com": {
+    "email": "dad@example.com",
     "displayName": "Dad",
     "passwordHash": "a1b2c3...",
+    "salt": "f9e8d7...",
     "role": "admin",
-    "anthropicApiKey": "sk-ant-api03-...",
-    "geminiApiKey": "AIzaSy...",
+    "passwordVersion": 1,
+    "anthropicApiKey": null,
+    "geminiApiKey": null,
     "createdAt": "2026-03-28T10:00:00.000Z"
   },
-  "emma": {
+  "emma_example.com": {
+    "email": "emma@example.com",
     "displayName": "Emma",
     "passwordHash": "d4e5f6...",
+    "salt": "c6b5a4...",
     "role": "member",
+    "passwordVersion": 1,
     "anthropicApiKey": null,
-    "geminiApiKey": "AIzaSy...",
+    "geminiApiKey": null,
     "createdAt": "2026-03-28T10:05:00.000Z"
   }
 }
 ```
+
+User IDs are derived from the email via `sanitizeKey(email.toLowerCase())` — e.g.,
+`dad@example.com` → `dad_example.com`. The email is stored separately so the
+original address is preserved for login matching and password reset emails.
 
 ### 3.2 Roles
 
@@ -96,8 +106,11 @@ The first account created during setup is automatically `admin`.
 ### 3.3 Password Hashing
 
 ```js
-function hashPassword(password, userId) {
-  const salt = userId;  // deterministic, unique per user
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 ```
@@ -105,7 +118,12 @@ function hashPassword(password, userId) {
 Uses `scryptSync` (Node built-in, no new dependencies). Scrypt is a
 memory-hard key derivation function — resistant to GPU/ASIC brute-force
 attacks, unlike plain SHA-256 which can be cracked at billions of attempts
-per second. The userId serves as a unique salt per account.
+per second. Each user gets a random 16-byte salt stored alongside their hash.
+This decouples the hash from the user's email, so email changes don't require
+re-hashing the password.
+
+Passwords must be at least 8 characters. Password hash comparisons use
+`crypto.timingSafeEqual` to prevent timing attacks.
 
 ### 3.4 API Key Storage
 
@@ -123,16 +141,26 @@ show the settings prompt.
 The current single-token cookie is replaced with a structured format:
 
 ```
-userId:timestamp:hmac
+userId:timestamp:passwordVersion:hmac
 ```
 
 Where:
-- `userId` — the account identifier (e.g., `emma`)
+- `userId` — the account identifier (e.g., `emma_example.com`)
 - `timestamp` — Unix epoch in seconds when the session was created
-- `hmac` — `HMAC-SHA256(SESSION_SECRET, userId + ":" + timestamp)`
+- `passwordVersion` — integer that increments on password change/reset
+- `hmac` — `HMAC-SHA256(SESSION_SECRET, userId + ":" + timestamp + ":" + passwordVersion)`
 
 The cookie attributes remain the same: `HttpOnly`, `SameSite=Strict`,
 `Secure` (in production), `Max-Age=30 days`, `Path=/`.
+
+**Session invalidation:** When a user changes or resets their password,
+`passwordVersion` is incremented on the user record. The auth middleware
+compares the version in the token to the stored version — mismatches are
+rejected, automatically logging out all other sessions.
+
+**Server-side expiry:** `verifySessionToken` checks the embedded timestamp
+against `SESSION_MAX_AGE` (30 days). Expired tokens are rejected even if the
+browser still has the cookie.
 
 ### 4.2 Session Secret
 
@@ -169,18 +197,19 @@ function getSessionSecret() {
 
 ### 4.3 Authentication Middleware
 
-The `requireAuth` middleware is updated to:
+The `requireAuth` middleware:
 
-1. Parse the `vq_session` cookie.
-2. Split on `:` to extract `userId`, `timestamp`, and `hmac`.
-3. Recompute the HMAC and compare using `timingSafeEqual`.
-4. Look up the user in `users.json`.
-5. Set `req.user = { id, displayName, role, anthropicApiKey, geminiApiKey }`
-   on the request object.
+1. Parses the `vq_session` cookie.
+2. Splits on `:` to extract `userId`, `timestamp`, `passwordVersion`, and `hmac`.
+3. Recomputes the HMAC and compares using `timingSafeEqual`.
+4. Checks server-side timestamp expiry.
+5. Looks up the user in `users.json` and verifies `passwordVersion` matches.
+6. Sets `req.user = { id, displayName, role }` on the request object.
 
-If `users.json` doesn't exist, the middleware falls back to the current
-single-password behavior (comparing the cookie against `AUTH_TOKEN`), and sets
-`req.user = null`. This is the **legacy mode**.
+If `users.json` doesn't exist and no `AUTH_PASSWORD` is set, the middleware
+redirects to `/setup` so the admin can create the first account. If
+`AUTH_PASSWORD` is set without `users.json`, it falls back to legacy
+single-password mode and sets `req.user = null`.
 
 ---
 
@@ -237,6 +266,42 @@ The `DELETE /api/books/:hash` endpoint currently reads book data and computes
 chapter hashes to find related files. This logic is updated to prefix all
 file paths with `u_{userId}_`, so deletion only touches the requesting user's
 files.
+
+---
+
+## 5.5 Password Reset Flow
+
+Users can reset their password via email using Resend as the transactional
+email provider. The flow:
+
+1. **`GET /forgot-password`** — renders an email input form.
+2. **`POST /api/forgot-password`** — generates a random 32-byte token, stores
+   its SHA-256 hash and a 1-hour expiry on the user record (`resetTokenHash`,
+   `resetTokenExpiry`), and sends the raw token in a link via Resend.
+3. **`GET /reset-password?token=xxx&email=yyy`** — renders the new password form.
+4. **`POST /api/reset-password`** — verifies the token hash using
+   `timingSafeEqual`, checks expiry, updates the password with a new random
+   salt, increments `passwordVersion` (invalidating all sessions), and clears
+   the token fields (single-use).
+
+Security measures:
+- **Token stored as hash** — if `users.json` is compromised, raw tokens can't
+  be recovered.
+- **Same response for all emails** — `POST /api/forgot-password` always shows
+  "check your email" regardless of whether the email exists (prevents
+  enumeration).
+- **5-minute cooldown** — only one reset email per address per 5 minutes,
+  regardless of how many IPs request it (prevents email flooding).
+- **Rate limited** — the `authLimiter` (5 req / 15 min per IP) is applied to
+  both forgot-password and reset-password endpoints.
+- **XSS protection** — query params in the reset form are HTML-escaped.
+
+Environment variables:
+- `RESEND_API_KEY` — API key from resend.com (required in production).
+- `APP_URL` — public URL for reset links (e.g., `https://vocabquest.app`).
+- `EMAIL_FROM` — sender address (must be verified in Resend).
+
+In dev mode (no `RESEND_API_KEY`), the reset URL is logged to the console.
 
 ---
 
