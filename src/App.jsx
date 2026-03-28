@@ -3221,7 +3221,7 @@ function ResultsPhase({ assets, scores, bookTitle, bookHash, chapterTitle, onPla
 // ── Admin panel — manage family/friend accounts ──────────────────────────────
 // Visible only to admin users. Lists all accounts with the ability to add new
 // members or delete existing ones. Communicates with GET/POST/DELETE /api/users.
-function AdminPanel({ currentUser, onClose }) {
+function AdminPanel({ currentUser }) {
   const [users, setUsers] = useState([]);
   const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
@@ -3270,10 +3270,7 @@ function AdminPanel({ currentUser, onClose }) {
 
   return (
     <div className="admin-panel">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h2>Manage Users</h2>
-        <button className="link-btn" onClick={onClose} style={{ color: "var(--gold-dim)", background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>Close</button>
-      </div>
+      <h2 style={{ marginBottom: 12 }}>Manage Users</h2>
       <ul className="user-list">
         {users.map(u => (
           <li key={u.id}>
@@ -3316,11 +3313,10 @@ export default function App() {
   const [uploadKey, setUploadKey] = useState(0);
 
   // ── Multi-user state ─────────────────────────────────────────────────
-  // Fetches the current user's profile from GET /api/me on mount. Returns
-  // null in legacy mode (single-password auth). Used to display the user's
-  // name, show the admin panel, and gate admin-only features.
+  // Fetches the current user's profile from GET /api/me on mount. Used to
+  // display the user's name and determine role. Admin users see only the
+  // user management panel; members see the full game flow.
   const [currentUser, setCurrentUser] = useState(null);
-  const [showAdmin, setShowAdmin] = useState(false);
 
   useEffect(() => {
     fetch("/api/me")
@@ -3335,17 +3331,12 @@ export default function App() {
       {/* game-active class tightens spacing so the question card fits without scrolling on a tablet */}
       <div className={`app${phase === "game" || phase === "review-game" ? " game-active" : ""}`}>
 
-        {/* ── User bar: shows current user, admin link, and logout ──────── */}
+        {/* ── User bar: shows current user and logout ─────────────────── */}
         {/* Hidden during game phases to maximize screen space for the card. */}
         {/* Only rendered in multi-user mode (currentUser !== null).         */}
         {currentUser && phase !== "game" && phase !== "review-game" && (
           <div className="user-bar">
             <span>Hi, {currentUser.displayName}</span>
-            {currentUser.role === "admin" && (
-              <button className="link-btn" onClick={() => setShowAdmin(s => !s)}>
-                {showAdmin ? "Hide Admin" : "Admin"}
-              </button>
-            )}
             <button className="link-btn" onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { window.location.href = '/login'; }).catch(() => { window.location.href = '/login'; })}>Log out</button>
           </div>
         )}
@@ -3358,12 +3349,13 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Admin panel: manage family/friend accounts ────────────────── */}
-        {showAdmin && currentUser?.role === "admin" && (
-          <AdminPanel currentUser={currentUser} onClose={() => setShowAdmin(false)} />
+        {/* ── Admin view: admin accounts see only the user management panel ── */}
+        {currentUser?.role === "admin" && (
+          <AdminPanel currentUser={currentUser} />
         )}
 
-        {phase === "upload" && (
+        {/* ── Member views: the full game flow ────────────────────────────── */}
+        {currentUser && currentUser.role !== "admin" && phase === "upload" && (
           <UploadPhase
             key={uploadKey}
             onParsed={data => { setBookData(data); setPhase("bible"); }}
@@ -3371,7 +3363,7 @@ export default function App() {
           />
         )}
 
-        {phase === "bible" && (
+        {currentUser && currentUser.role !== "admin" && phase === "bible" && (
           <StoryBiblePhase
             fullText={bookData.fullText}
             bookTitle={bookData.bookTitle}
@@ -3379,7 +3371,7 @@ export default function App() {
           />
         )}
 
-        {phase === "chapters" && (
+        {currentUser && currentUser.role !== "admin" && phase === "chapters" && (
           <ChapterPhase
             chapters={bookData.chapters}
             bookTitle={bookData.bookTitle}
@@ -3388,7 +3380,7 @@ export default function App() {
           />
         )}
 
-        {phase === "suggest" && (
+        {currentUser && currentUser.role !== "admin" && phase === "suggest" && (
           <SuggestPhase
             chapter={chapter}
             bookTitle={bookData.bookTitle}
@@ -3397,7 +3389,7 @@ export default function App() {
           />
         )}
 
-        {phase === "generating" && (
+        {currentUser && currentUser.role !== "admin" && phase === "generating" && (
           <GeneratingPhase
             words={chosenWords}
             bookTitle={bookData.bookTitle}
@@ -3409,7 +3401,7 @@ export default function App() {
           />
         )}
 
-        {phase === "game" && (
+        {currentUser && currentUser.role !== "admin" && phase === "game" && (
           <GamePhase
             assets={gameAssets}
             bookTitle={bookData.bookTitle}
@@ -3418,7 +3410,7 @@ export default function App() {
           />
         )}
 
-        {phase === "results" && (
+        {currentUser && currentUser.role !== "admin" && phase === "results" && (
           <ResultsPhase
             assets={gameAssets}
             scores={scores}
@@ -3433,21 +3425,21 @@ export default function App() {
             Entered from the "Practice N words" banner on the upload screen.
             review-loading fetches cached assets → review-game plays them → review-results
             records the session and shows scores → back to upload. */}
-        {phase === "review-loading" && (
+        {currentUser && currentUser.role !== "admin" && phase === "review-loading" && (
           <ReviewLoadingPhase
             onReady={assets => { setReviewAssets(assets); setPhase("review-game"); }}
             onEmpty={() => { setUploadKey(k => k + 1); setPhase("upload"); }}
           />
         )}
 
-        {phase === "review-game" && (
+        {currentUser && currentUser.role !== "admin" && phase === "review-game" && (
           <ReviewGamePhase
             assets={reviewAssets}
             onDone={s => { setReviewScores(s); setPhase("review-results"); }}
           />
         )}
 
-        {phase === "review-results" && (
+        {currentUser && currentUser.role !== "admin" && phase === "review-results" && (
           <ReviewResultsPhase
             assets={reviewAssets}
             scores={reviewScores}

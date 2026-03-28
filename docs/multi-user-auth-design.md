@@ -96,7 +96,7 @@ original address is preserved for login matching and password reset emails.
 
 | Role | Capabilities |
 |------|-------------|
-| `admin` | Create and delete user accounts. Full app access. |
+| `admin` | Create and delete user accounts. Sees only the user management panel (no game access). |
 | `member` | Use the app (upload books, play games, manage own API keys). Cannot manage other users. |
 
 The first account created during setup is automatically `admin`.
@@ -386,10 +386,14 @@ Hi, Emma  ·  Log out          [Vocab Quest]
 
 ### 8.3 Admin Panel
 
-Visible only when `currentUser.role === 'admin'`:
+Admin users see **only** the user management panel — the game flow (upload,
+chapters, exercises, review) is hidden entirely. This makes the admin account
+a dedicated management account; to play the game, create a separate member
+account.
 
+The admin panel shows:
 - List of all user accounts (fetched from `GET /api/users`)
-- "Add User" form: username, display name, password
+- "Add User" form: email, display name, password
 - "Delete" button per user (with confirmation)
 
 ### 8.4 API Key Settings (Deferred)

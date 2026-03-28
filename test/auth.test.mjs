@@ -734,6 +734,59 @@ describe('User management (admin)', () => {
   });
 });
 
+// ── Admin-only view contract ────────────────────────────────────────────────
+// The frontend uses the role from GET /api/me to decide what to render:
+//   admin  → user management panel only (no game flow)
+//   member → full game flow (no admin panel)
+// These tests verify the API contracts that drive that view logic.
+
+describe('Admin-only view contract', () => {
+  it('/api/me returns role "admin" for the admin account', async () => {
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'testpass123' });
+    const cookie = extractCookie(loginRes);
+    const meRes = await jsonGet(`${BASE_URL}/api/me`, cookie);
+    const me = await meRes.json();
+    assert.equal(me.role, 'admin');
+    assert.equal(me.id, 'dad_example.com');
+    assert.ok(me.displayName);
+  });
+
+  it('/api/me returns role "member" for a member account', async () => {
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'emma@example.com', password: 'emma1234' });
+    const cookie = extractCookie(loginRes);
+    const meRes = await jsonGet(`${BASE_URL}/api/me`, cookie);
+    const me = await meRes.json();
+    assert.equal(me.role, 'member');
+    assert.equal(me.id, 'emma_example.com');
+  });
+
+  it('admin can list and manage users (view depends on this)', async () => {
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'dad@example.com', password: 'testpass123' });
+    const cookie = extractCookie(loginRes);
+    const res = await jsonGet(`${BASE_URL}/api/users`, cookie);
+    assert.equal(res.status, 200);
+    const users = await res.json();
+    assert.ok(users.length >= 2, 'Admin should see at least 2 users');
+    // Each user entry has the fields the admin panel needs
+    for (const u of users) {
+      assert.ok(u.id, 'User entry must have id');
+      assert.ok(u.displayName, 'User entry must have displayName');
+      assert.ok(u.role, 'User entry must have role');
+    }
+  });
+
+  it('member cannot access admin endpoints', async () => {
+    const loginRes = await jsonPost(`${BASE_URL}/api/login`, { email: 'emma@example.com', password: 'emma1234' });
+    const cookie = extractCookie(loginRes);
+    const listRes = await jsonGet(`${BASE_URL}/api/users`, cookie);
+    assert.equal(listRes.status, 403);
+    const createRes = await jsonPost(`${BASE_URL}/api/users`, {
+      email: 'sneaky@example.com', password: 'sneaky12',
+    }, cookie);
+    assert.equal(createRes.status, 403);
+  });
+});
+
 // ── KV namespacing (data isolation) ─────────────────────────────────────────
 
 describe('KV namespacing — full user isolation', () => {
