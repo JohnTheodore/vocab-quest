@@ -897,15 +897,18 @@ const STYLES = `
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(180,130,50,0.3);
     border-radius: 4px;
-    color: #e8d5a0;
+    color: #1a1206;
     font-size: 13px;
+  }
+  .admin-panel .add-user-form input::placeholder {
+    color: rgba(26,18,6,0.45);
   }
   .admin-panel .add-user-form button {
     padding: 7px 14px;
     background: rgba(180,130,50,0.15);
     border: 1px solid rgba(180,130,50,0.4);
     border-radius: 4px;
-    color: #d4b04a;
+    color: #1a1206;
     font-size: 13px;
     cursor: pointer;
   }
